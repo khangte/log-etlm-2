@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "log-etlm/health_check/1.0.0",
+  "title": "health_check 1.0.0",
+  "description": "필터링 검증용 이벤트. 공통 필드 4개만 포함하며 context·properties는 없다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "event_timestamp", "event_name", "schema_version"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "event_timestamp": {
+      "description": "UTC, 밀리초 3자리 고정",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "event_name": { "const": "health_check" },
+    "schema_version": { "const": "1.0.0" }
+  }
+}

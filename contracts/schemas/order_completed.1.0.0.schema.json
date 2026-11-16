@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "log-etlm/order_completed/1.0.0",
+  "title": "order_completed 1.0.0",
+  "description": "주문 완료 이벤트 계약. 정의 외 필드와 null을 허용하지 않는다. 금액 계산·상품 일관성·지역 조합은 스키마 밖 규칙으로 별도 검증한다(contracts/README.md).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "event_timestamp", "event_name", "schema_version", "context", "properties"],
+  "properties": {
+    "event_id": { "$ref": "#/$defs/uuid_v4" },
+    "event_timestamp": {
+      "description": "UTC, 밀리초 3자리 고정",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "event_name": { "const": "order_completed" },
+    "schema_version": { "const": "1.0.0" },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_id", "session_id", "is_logged_in", "user_tier", "device", "network", "page"],
+      "properties": {
+        "user_id": { "description": "합성 사용자 ID, 풀 크기에 따라 5자리 이상", "type": "string", "pattern": "^usr_[0-9]{5,}$" },
+        "session_id": { "type": "string", "pattern": "^sess_[0-9a-f]{32}$" },
+        "is_logged_in": { "type": "boolean" },
+        "user_tier": { "enum": ["STANDARD", "VIP"] },
+        "device": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["os", "os_version", "app_version", "device_model", "device_type"],
+          "properties": {
+            "os": { "$ref": "#/$defs/non_empty_string" },
+            "os_version": { "$ref": "#/$defs/non_empty_string" },
+            "app_version": { "$ref": "#/$defs/non_empty_string" },
+            "device_model": { "$ref": "#/$defs/non_empty_string" },
+            "device_type": { "$ref": "#/$defs/non_empty_string" }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["carrier", "country", "region", "city"],
+          "properties": {
+            "carrier": { "$ref": "#/$defs/non_empty_string" },
+            "country": { "description": "ISO 3166-1 alpha-2", "type": "string", "pattern": "^[A-Z]{2}$" },
+            "region": { "$ref": "#/$defs/non_empty_string" },
+            "city": { "$ref": "#/$defs/non_empty_string" }
+          }
+        },
+        "page": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["current_url", "referrer_url", "utm_source", "utm_medium"],
+          "properties": {
+            "current_url": { "$ref": "#/$defs/path_without_query" },
+            "referrer_url": { "$ref": "#/$defs/path_without_query" },
+            "utm_source": { "$ref": "#/$defs/non_empty_string" },
+            "utm_medium": { "$ref": "#/$defs/non_empty_string" }
+          }
+        }
+      }
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order_id", "payment_method", "currency", "total_amount", "discount_amount", "items"],
+      "properties": {
+        "order_id": { "type": "string", "pattern": "^ord_[0-9a-f]{32}$" },
+        "payment_method": { "enum": ["credit_card", "kakao_pay", "naver_pay", "bank_transfer"] },
+        "currency": { "const": "KRW" },
+        "total_amount": { "type": "integer", "minimum": 0 },
+        "discount_amount": { "type": "integer", "minimum": 0 },
+        "items": {
+          "description": "v1은 주문당 상품 1종 고정",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["product_id", "product_name", "category", "price", "quantity"],
+            "properties": {
+              "product_id": { "type": "string", "pattern": "^prod_[0-9]{4}$" },
+              "product_name": { "$ref": "#/$defs/non_empty_string" },
+              "category": { "enum": ["electronics", "fashion", "home"] },
+              "price": { "type": "integer", "minimum": 1 },
+              "quantity": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "uuid_v4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "non_empty_string": { "type": "string", "minLength": 1 },
+    "path_without_query": {
+      "description": "쿼리 문자열·프래그먼트 없는 고정 경로",
+      "type": "string",
+      "pattern": "^/[^?#]*$"
+    }
+  }
+}
