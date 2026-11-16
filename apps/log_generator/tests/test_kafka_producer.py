@@ -3,6 +3,7 @@
 import io
 import json
 import unittest
+from collections import Counter
 from unittest.mock import patch
 
 from confluent_kafka import KafkaError
@@ -186,8 +187,13 @@ class KafkaOutputTests(unittest.TestCase):
         self.assertEqual((out.retries, out.tx_errors), (5, 1))
 
     def test_percentiles_nearest_rank(self):
-        self.assertEqual(percentiles(list(range(1, 101))), {"p50": 50, "p95": 95, "p99": 99})
-        self.assertEqual(percentiles([]), {"p50": None, "p95": None, "p99": None})
+        self.assertEqual(percentiles(Counter(range(1, 101))), {"p50": 50, "p95": 95, "p99": 99})
+        self.assertEqual(percentiles(Counter()), {"p50": None, "p95": None, "p99": None})
+        # 중복 값은 건수로 합쳐도 리스트 정렬 방식과 같은 결과다.
+        values = [-3, 5, 5, 5, 7, 7, 9, 100, 100, 250]
+        ordered = sorted(values)
+        expected = {f"p{q}": ordered[-(-len(values) * q // 100) - 1] for q in (50, 95, 99)}
+        self.assertEqual(percentiles(Counter(values)), expected)
 
 
 class RunWithKafkaTests(unittest.TestCase):

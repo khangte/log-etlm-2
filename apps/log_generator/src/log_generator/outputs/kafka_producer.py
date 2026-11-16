@@ -8,6 +8,7 @@ main.run이 기존 출력 오류와 같은 경로(종료 코드 1)로 처리하�
 
 import json
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Callable, TextIO
 
@@ -23,14 +24,19 @@ class KafkaOutputError(OSError):
     """Kafka 전송을 계속할 수 없거나 종료 시 전달 실패·미전달이 남은 경우."""
 
 
-def percentiles(values: list[float]) -> dict:
-    """nearest-rank 백분위. 음수도 0으로 보정하지 않는다. 값이 없으면 None."""
-    if not values:
+def percentiles(counts: Counter) -> dict:
+    """{값: 건수} 히스토그램의 nearest-rank 백분위. 음수도 0으로 보정하지 않는다. 값이 없으면 None."""
+    total = counts.total()
+    if not total:
         return {"p50": None, "p95": None, "p99": None}
-    ordered = sorted(values)
-    return {
-        f"p{q}": round(ordered[max(0, -(-len(ordered) * q // 100) - 1)], 3) for q in (50, 95, 99)
-    }
+    result, keys, seen = {}, iter(sorted(counts)), 0
+    for q in (50, 95, 99):
+        rank = max(1, -(-total * q // 100))  # ceil(total × q / 100)번째 값
+        while seen < rank:
+            value = next(keys)
+            seen += counts[value]
+        result[f"p{q}"] = value
+    return result
 
 
 def _event_ms(payload: bytes) -> int | None:
@@ -54,9 +60,9 @@ class KafkaOutput:
         self.client_errors = 0  # fatal이 아닌 error_cb 건수
         self.retries = 0  # 통계 콜백의 브로커 요청 재시도 누적(메시지별 정확한 건수가 아니다)
         self.tx_errors = 0
-        # shortcut: 값 전체를 메모리에 둔다. 수십 분 이상 무제한 실행 시 히스토그램으로 교체.
-        self.ack_latency_ms: list[float] = []
-        self.append_delay_ms: list[int] = []  # 생성 -> Kafka(LogAppendTime) 지연. 음수 포함
+        # 값 대신 {지연: 건수}만 둬서 무제한 실행에도 메모리가 실행 시간에 비례해 늘지 않는다.
+        self.ack_latency_ms: Counter = Counter()  # 0.1ms 단위로 반올림
+        self.append_delay_ms: Counter = Counter()  # 생성 -> Kafka(LogAppendTime) 지연(ms 정수). 음수 포함
         self.delay_unparseable = 0  # event_timestamp를 읽을 수 없어 지연 계산 불가
         self.delay_not_append_time = 0  # 콜백 timestamp 종류가 LogAppendTime이 아님
         self._abort: str | None = None
@@ -80,7 +86,7 @@ class KafkaOutput:
     def _on_delivery(self, error: KafkaError | None, msg) -> None:
         latency = msg.latency()
         if latency is not None:
-            self.ack_latency_ms.append(latency * 1000)
+            self.ack_latency_ms[round(latency * 1000, 1)] += 1
         if error is not None:
             self.failed += 1
             self._abort = self._abort or f"delivery failed: {error}"
@@ -94,7 +100,7 @@ class KafkaOutput:
         if event_ms is None:
             self.delay_unparseable += 1
         else:
-            self.append_delay_ms.append(ts - event_ms)
+            self.append_delay_ms[ts - event_ms] += 1
 
     def _on_error(self, error: KafkaError) -> None:
         # 브로커 단절·fatal 오류는 개별 메시지가 아닌 이 콜백으로만 전달된다.
@@ -176,8 +182,8 @@ class KafkaOutput:
                 "compression": self.config.compression,
                 "ack_latency_ms": percentiles(self.ack_latency_ms),
                 "gen_to_kafka_ms": percentiles(self.append_delay_ms),
-                "gen_to_kafka_samples": len(self.append_delay_ms),
-                "gen_to_kafka_negative": sum(1 for d in self.append_delay_ms if d < 0),
+                "gen_to_kafka_samples": self.append_delay_ms.total(),
+                "gen_to_kafka_negative": sum(c for d, c in self.append_delay_ms.items() if d < 0),
                 "gen_to_kafka_min": min(self.append_delay_ms, default=None),
                 "gen_to_kafka_unparseable": self.delay_unparseable,
                 "timestamp_not_log_append_time": self.delay_not_append_time,
