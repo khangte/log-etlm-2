@@ -1,6 +1,7 @@
-"""실행 진입점. 1단계는 stdout·file 출력만 지원하며 Kafka 전송 모드는 2단계에서 추가한다.
+"""실행 진입점. stdout·file·kafka 출력을 지원한다.
 
-데이터(stdout·파일)에는 페이로드 + LF만 쓰고, 상태·최종 통계는 stderr에 JSON 한 줄로 쓴다.
+stdout·파일에는 페이로드 + LF만 쓰고, Kafka에는 LF 없이 페이로드 bytes만 보낸다.
+상태·최종 통계는 stderr에 JSON 한 줄로 쓴다(kafka 출력이면 "kafka" 키에 전송 지표 포함).
 종료 코드: 0 정상 완료, 1 출력 오류, 2 설정 오류, 130 Ctrl+C.
 """
 
@@ -12,10 +13,13 @@ import time
 from collections import Counter
 from typing import BinaryIO, TextIO
 
+from confluent_kafka import KafkaException
+
 from log_generator import pools
 from log_generator.config import Config, ConfigError, load_config
 from log_generator.generator import EventGenerator
 from log_generator.outputs.file import open_file
+from log_generator.outputs.kafka_producer import KafkaOutput
 
 TICK_SEC = 0.005  # 5ms마다 밀린 만큼만 출력해 1초 분량을 한꺼번에 내보내지 않는다.
 
@@ -97,8 +101,12 @@ def _log(err: TextIO, data: dict) -> None:
     err.flush()
 
 
-def run(config: Config, out: BinaryIO, err: TextIO) -> tuple[Stats, str]:
-    """설정 속도로 이벤트를 out에 기록한다. (통계, 종료 상태)를 반환한다."""
+def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | None = None) -> tuple[Stats, str]:
+    """설정 속도로 이벤트를 out(또는 kafka)에 기록한다. (통계, 종료 상태)를 반환한다.
+
+    kafka가 있으면 out은 쓰지 않는다. Stats의 건수는 큐 등록 기준이고 ACK 성공 건수는 kafka 지표에 있다.
+    """
+    sink = kafka or out  # 둘 다 flush()를 제공하며 kafka의 flush는 실패·미전달 시 OSError를 낸다.
     generator = EventGenerator(random.Random(config.seed), pools.build_user_pool(config.user_pool_size))
     stats = Stats(config.eps)
     # 한 틱에 허용하는 최대 출력 수. 이보다 밀리면 기준 시각을 당겨 밀린 분량을 포기한다(몰아서 따라잡지 않음).
@@ -112,7 +120,11 @@ def run(config: Config, out: BinaryIO, err: TextIO) -> tuple[Stats, str]:
         while config.max_events is None or stats.events < config.max_events:
             now = time.monotonic()
             if now < next_tick:
-                time.sleep(next_tick - now)
+                # kafka는 대기 시간에 delivery 콜백을 처리한다.
+                if kafka:
+                    kafka.poll(next_tick - now)
+                else:
+                    time.sleep(next_tick - now)
                 now = time.monotonic()
             next_tick += TICK_SEC
             if next_tick < now:  # 출력 지연으로 틱이 밀리면 다음 틱을 현재 기준으로 맞춘다.
@@ -127,19 +139,22 @@ def run(config: Config, out: BinaryIO, err: TextIO) -> tuple[Stats, str]:
 
             for _ in range(due):
                 event = generator.next_event()
-                out.write(event.payload + b"\n")
+                if kafka:
+                    kafka.send(event.payload)
+                else:
+                    out.write(event.payload + b"\n")
                 stats.record(event.kind, event.anomaly, len(event.payload))
 
             if now >= next_status:
-                _log(err, stats.progress())
+                _log(err, stats.progress() | ({"kafka": kafka.metrics()} if kafka else {}))
                 next_status += config.status_interval_sec
                 if next_status <= now:  # 출력 지연으로 여러 주기가 밀리면 몰아서 출력하지 않고 현재 기준으로 다시 센다.
                     next_status = now + config.status_interval_sec
-        out.flush()
+        sink.flush()
     except KeyboardInterrupt:
         status = "interrupted"
         try:
-            out.flush()
+            sink.flush()
         except OSError as exc:
             stats.output_errors += 1
             status = "output_error"
@@ -149,7 +164,7 @@ def run(config: Config, out: BinaryIO, err: TextIO) -> tuple[Stats, str]:
         stats.output_errors += 1
         status = "output_error"
         _log(err, {"error": f"output write failed: {exc}"})
-    _log(err, stats.snapshot(status))
+    _log(err, stats.snapshot(status) | ({"kafka": kafka.metrics(detail=True)} if kafka else {}))
     return stats, status
 
 
@@ -160,7 +175,15 @@ def main() -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
 
-    if config.output == "file":
+    kafka = None
+    if config.output == "kafka":
+        out = None
+        try:
+            kafka = KafkaOutput(config.kafka, sys.stderr)
+        except KafkaException as exc:  # 클라이언트 설정값을 librdkafka가 거부한 경우
+            print(f"cannot create kafka producer: {exc}", file=sys.stderr)
+            return 2
+    elif config.output == "file":
         try:
             out = open_file(config.output_path)
         except OSError as exc:
@@ -169,7 +192,7 @@ def main() -> int:
     else:
         out = sys.stdout.buffer
 
-    _, status = run(config, out, sys.stderr)
+    _, status = run(config, out, sys.stderr, kafka)
     if config.output == "file":
         try:
             out.close()

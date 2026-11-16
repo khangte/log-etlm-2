@@ -12,7 +12,9 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-OUTPUTS = ("stdout", "file")
+OUTPUTS = ("stdout", "file", "kafka")
+# librdkafka compression.type 중 허용하는 값. 오타로 인한 기동 후 오류를 설정 단계에서 막는다.
+COMPRESSIONS = ("none", "gzip", "snappy", "lz4", "zstd")
 # 실행 디렉터리에 따라 다른 .env를 읽지 않도록 프로젝트 루트(src/log_generator의 4단계 위)를 기준으로 한다.
 # 컨테이너 /app/src/log_generator처럼 경로가 얕으면 루트가 없으므로 파일 없이 환경변수만 쓴다.
 _PARENTS = Path(__file__).resolve().parents
@@ -24,6 +26,19 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class KafkaConfig:
+    """PRODUCER_OUTPUT=kafka일 때만 사용한다. acks=all·idempotence 등 고정값은 kafka_producer.py에 둔다."""
+
+    bootstrap_servers: str
+    topic: str
+    linger_ms: int
+    compression: str
+    delivery_timeout_ms: int
+    queue_full_timeout_sec: int  # 로컬 큐가 가득 찼을 때 poll하며 기다리는 최대 시간
+    flush_timeout_sec: int  # 종료 시 flush 최대 대기 시간
+
+
+@dataclass(frozen=True)
 class Config:
     eps: int
     output: str
@@ -32,6 +47,7 @@ class Config:
     user_pool_size: int
     seed: int | None
     status_interval_sec: int
+    kafka: KafkaConfig | None  # output이 kafka일 때만 값이 있다.
 
 
 def _value(environ: Mapping[str, str | None], key: str, *, allow_empty: bool = False) -> str:
@@ -84,6 +100,20 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         if not output_path.parent.is_dir():
             raise ConfigError(f"output directory does not exist: {output_path.parent}")
 
+    # Kafka 키는 출력 대상과 무관하게 모두 명시해야 하지만 값 검증과 사용은 kafka 출력에만 적용한다.
+    compression = _value(env, "PRODUCER_KAFKA_COMPRESSION")
+    kafka = KafkaConfig(
+        bootstrap_servers=_value(env, "PRODUCER_KAFKA_BOOTSTRAP_SERVERS"),
+        topic=_value(env, "PRODUCER_KAFKA_TOPIC"),
+        linger_ms=_int(env, "PRODUCER_KAFKA_LINGER_MS", minimum=0),
+        compression=compression,
+        delivery_timeout_ms=_int(env, "PRODUCER_KAFKA_DELIVERY_TIMEOUT_MS", minimum=1),
+        queue_full_timeout_sec=_int(env, "PRODUCER_KAFKA_QUEUE_FULL_TIMEOUT_SEC", minimum=1),
+        flush_timeout_sec=_int(env, "PRODUCER_KAFKA_FLUSH_TIMEOUT_SEC", minimum=1),
+    )
+    if output == "kafka" and compression not in COMPRESSIONS:
+        raise ConfigError(f"PRODUCER_KAFKA_COMPRESSION must be one of {COMPRESSIONS}: {compression!r}")
+
     # 빈 seed는 무작위를, 최대 건수 0은 무제한을 명시적으로 뜻한다.
     seed = _value(env, "PRODUCER_SEED", allow_empty=True)
     return Config(
@@ -94,4 +124,5 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         user_pool_size=_int(env, "PRODUCER_USER_POOL_SIZE", minimum=1),
         seed=_int(env, "PRODUCER_SEED", minimum=None) if seed else None,
         status_interval_sec=_int(env, "PRODUCER_STATUS_INTERVAL_SEC", minimum=1),
+        kafka=kafka if output == "kafka" else None,
     )

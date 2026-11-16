@@ -119,7 +119,7 @@ log-etlm-2/
 │   │   │   └── outputs/
 │   │   │       ├── __init__.py
 │   │   │       ├── file.py             # stdout은 main.py에서 연결
-│   │   │       ├── kafka.py            # 2단계에서 추가
+│   │   │       ├── kafka_producer.py   # 2단계에서 추가
 │   │   │       └── http.py             # FastAPI 도입 시 추가
 │   │   └── tests/
 │   │
