@@ -164,13 +164,20 @@ ENV_VALUES = {
     "PRODUCER_USER_POOL_SIZE": "500",
     "PRODUCER_SEED": "",
     "PRODUCER_STATUS_INTERVAL_SEC": "1",
+    "PRODUCER_KAFKA_BOOTSTRAP_SERVERS": "localhost:9092",
+    "PRODUCER_KAFKA_TOPIC": "raw.ecommerce.orders.v1",
+    "PRODUCER_KAFKA_LINGER_MS": "5",
+    "PRODUCER_KAFKA_COMPRESSION": "lz4",
+    "PRODUCER_KAFKA_DELIVERY_TIMEOUT_MS": "30000",
+    "PRODUCER_KAFKA_QUEUE_FULL_TIMEOUT_SEC": "30",
+    "PRODUCER_KAFKA_FLUSH_TIMEOUT_SEC": "30",
 }
 
 
 class ConfigTests(unittest.TestCase):
     def test_explicit_env_values(self):
         config = load_config(ENV_VALUES)
-        self.assertEqual(config, Config(5000, "stdout", None, 300000, 500, None, 1))
+        self.assertEqual(config, Config(5000, "stdout", None, 300000, 500, None, 1, None))
         config = load_config(ENV_VALUES | {"PRODUCER_EPS": "100", "PRODUCER_SEED": "-3",
                                           "PRODUCER_MAX_EVENTS": "0"})
         self.assertEqual((config.eps, config.seed, config.max_events), (100, -3, None))
@@ -237,12 +244,26 @@ class ConfigTests(unittest.TestCase):
             {"PRODUCER_USER_POOL_SIZE": "abc"},
             {"PRODUCER_SEED": "invalid"},
             {"PRODUCER_STATUS_INTERVAL_SEC": "0"},
-            {"PRODUCER_OUTPUT": "kafka"},
+            {"PRODUCER_OUTPUT": "nats"},
+            {"PRODUCER_OUTPUT": "kafka", "PRODUCER_KAFKA_COMPRESSION": "lz5"},
+            {"PRODUCER_KAFKA_LINGER_MS": "-1"},
+            {"PRODUCER_KAFKA_DELIVERY_TIMEOUT_MS": "0"},
+            {"PRODUCER_KAFKA_QUEUE_FULL_TIMEOUT_SEC": "0"},
+            {"PRODUCER_KAFKA_FLUSH_TIMEOUT_SEC": "x"},
             {"PRODUCER_OUTPUT": "file"},
             {"PRODUCER_OUTPUT": "file", "PRODUCER_OUTPUT_PATH": "/nonexistent-dir/x.jsonl"},
         ):
             with self.subTest(overrides=overrides), self.assertRaises(ConfigError):
                 load_config(ENV_VALUES | overrides)
+
+    def test_kafka_config_only_when_output_is_kafka(self):
+        self.assertIsNone(load_config(ENV_VALUES).kafka)
+        kafka = load_config(ENV_VALUES | {"PRODUCER_OUTPUT": "kafka"}).kafka
+        self.assertEqual(
+            (kafka.bootstrap_servers, kafka.topic, kafka.linger_ms, kafka.compression,
+             kafka.delivery_timeout_ms, kafka.queue_full_timeout_sec, kafka.flush_timeout_sec),
+            ("localhost:9092", "raw.ecommerce.orders.v1", 5, "lz4", 30000, 30, 30),
+        )
 
     def test_rejects_existing_output_file(self):
         with tempfile.TemporaryDirectory() as tmp:
