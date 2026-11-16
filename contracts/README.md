@@ -15,6 +15,8 @@ Producer가 만드는 Kafka 메시지 값(UTF-8 JSON 한 줄)의 계약이다. �
 
 검증 순서는 JSON 파싱 → `event_name`으로 스키마 선택 → 스키마 검증 → 아래 의미 규칙 검증이다.
 
+Spark의 지원 이벤트·버전 분류, 타입 변환, 정상 주문 1건당 1행의 평탄화 매핑과 Kafka 추적 컬럼은 [Spark PRD](../docs/prd/03-stream-processing.md#파싱이벤트-분류-규칙)에서 정의한다. 이 출력 매핑은 원본 JSON 계약을 변경하지 않는다. 정상 health_check도 해당 계약을 검증한 뒤 제외한다.
+
 ### 스키마 밖 의미 규칙
 
 JSON Schema로 표현하지 않으므로 별도 코드로 검증한다.
