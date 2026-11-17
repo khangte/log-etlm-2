@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+import jsonschema_rs
 from jsonschema import Draft202012Validator, validators
 from jsonschema.exceptions import ValidationError, best_match
 
@@ -57,17 +58,31 @@ if "date-time" not in _FORMAT_CHECKER.checkers:
     raise RuntimeError("rfc3339-validator is required for format: date-time")
 
 
-def _load_validator(file_name: str) -> Draft202012Validator:
-    """contracts/schemas의 계약 파일로 검증기를 만든다."""
-    schema = json.loads((CONTRACTS_DIR / "schemas" / file_name).read_text(encoding="utf-8"))
-    return _StrictValidator(schema, format_checker=_FORMAT_CHECKER)
+def _load_schema(file_name: str) -> dict:
+    """contracts/schemas의 계약 파일을 읽는다."""
+    return json.loads((CONTRACTS_DIR / "schemas" / file_name).read_text(encoding="utf-8"))
 
 
-# 지원 계약: (event_name, schema_version) → 검증기
-VALIDATORS = {
-    ("order_completed", "1.0.0"): _load_validator("order_completed.1.0.0.schema.json"),
-    ("health_check", "1.0.0"): _load_validator("health_check.1.0.0.schema.json"),
+_CONTRACT_FILES = {
+    ("order_completed", "1.0.0"): "order_completed.1.0.0.schema.json",
+    ("health_check", "1.0.0"): "health_check.1.0.0.schema.json",
 }
+# 지원 계약: (event_name, schema_version) → 엄격 검증기. 판정과 DLQ 오류 내용의 기준이다.
+VALIDATORS = {key: _StrictValidator(_load_schema(name), format_checker=_FORMAT_CHECKER)
+              for key, name in _CONTRACT_FILES.items()}
+# 1단 빠른 검증기(Rust). "유효" 판정만 신뢰하고 무효면 엄격 검증기로 다시 판정한다.
+# 소수점 표기 정수(15000.0)를 integer로 허용하므로 소수가 있는 문서에는 쓰지 않는다.
+# date-time 형식은 연도 0000·초 60을 허용하므로 event_timestamp는 기존 형식 검사기로 다시 확인한다.
+FAST_VALIDATORS = {key: jsonschema_rs.Draft202012Validator(_load_schema(name), validate_formats=True)
+                   for key, name in _CONTRACT_FILES.items()}
+
+
+def _fast_valid(key: tuple[str, str], doc: dict) -> bool:
+    """1단 판정. True면 엄격 검증기도 유효로 판정해야 한다(대조 테스트로 확인)."""
+    # shortcut: 계약의 format 필드가 event_timestamp 하나라고 가정한다. format 필드가 늘면 함께 재확인한다.
+    return FAST_VALIDATORS[key].is_valid(doc) and _FORMAT_CHECKER.conforms(doc["event_timestamp"], "date-time")
+
+
 _PRODUCTS = {p.product_id: (p.product_name, p.category, p.price) for p in PRODUCTS}
 _LOCATIONS = frozenset(LOCATIONS)
 
@@ -171,7 +186,9 @@ def classify(value: bytes | bytearray | None) -> dict:
     except UnicodeDecodeError as exc:
         return _result(DLQ, stage="parse", code="INVALID_UTF8", message=str(exc))
     try:
-        doc = json.loads(text, parse_constant=_reject_constant, object_pairs_hook=_reject_duplicates)
+        floats = []  # 소수 리터럴이 있으면 1단 빠른 검증을 건너뛴다.
+        doc = json.loads(text, parse_constant=_reject_constant, object_pairs_hook=_reject_duplicates,
+                         parse_float=lambda s: floats.append(s) or float(s))
     except (ValueError, RecursionError) as exc:
         return _result(DLQ, stage="parse", code="INVALID_JSON", message=str(exc))
 
@@ -193,7 +210,8 @@ def classify(value: bytes | bytearray | None) -> dict:
         return _result(DLQ, **known, stage="contract", code="CONTRACT_UNSUPPORTED",
                        message=f"unsupported event_name/schema_version: {event_name!r}/{schema_version!r}")
 
-    error = best_match(validator.iter_errors(doc))
+    fast_valid = not floats and _fast_valid((event_name, schema_version), doc)
+    error = None if fast_valid else best_match(validator.iter_errors(doc))
     if error is not None:
         return _schema_error(error, event_name, schema_version)
     if event_name == "health_check":

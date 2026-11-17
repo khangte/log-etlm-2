@@ -16,7 +16,7 @@ ADD --chmod=644 \
 
 # rfc3339-validator가 없으면 jsonschema가 format: date-time을 검사하지 않는다.
 # 버전은 pyproject.toml과 같게 유지한다.
-RUN pip3 install --no-cache-dir jsonschema==4.26.0 rfc3339-validator==0.1.4 pytest==9.2.0
+RUN pip3 install --no-cache-dir jsonschema==4.26.0 jsonschema-rs==0.61.2 rfc3339-validator==0.1.4 pytest==9.2.0
 
 # Spark 4.2의 base64()는 기본값으로 76자마다 CRLF를 넣는다. DLQ raw_value_base64를 표준 Base64로 만들기 위해
 # 컨테이너의 모든 세션(spark-submit 잡·pytest 세션)이 읽는 spark-defaults.conf에서 끈다.

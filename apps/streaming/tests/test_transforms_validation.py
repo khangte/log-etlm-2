@@ -5,6 +5,7 @@ import json
 import pytest
 
 from conftest import dump, sample_bytes
+from streaming import transforms
 from streaming.transforms import LONG_PATHS, VALIDATORS, classify
 
 EXPECTED_KEYS = {"outcome", "event_name", "schema_version", "error_stage", "error_code", "error_path",
@@ -16,6 +17,45 @@ def dlq(result, stage, code, path=None):
     assert result["outcome"] == "dlq", result
     assert (result["error_stage"], result["error_code"], result["error_path"]) == (stage, code, path), result
     assert result["error_message"]
+
+
+@pytest.fixture(autouse=True)
+def checked_fast_valid(monkeypatch):
+    """이 모듈의 모든 classify 입력에서 1단 "유효" 판정마다 엄격 검증기도 유효인지 대조한다."""
+    fast_valid = transforms._fast_valid
+
+    def _checked(key, doc):
+        """1단 판정을 돌려주되 엄격 판정과 어긋나면(불량 통과) 실패시킨다."""
+        valid = fast_valid(key, doc)
+        assert not valid or VALIDATORS[key].is_valid(doc), f"1단만 유효로 판정: {doc!r}"
+        return valid
+
+    monkeypatch.setattr(transforms, "_fast_valid", _checked)
+
+
+class TestTwoStageValidation:
+    """1단(jsonschema-rs)과 2단(엄격 검증기) 판정 일치."""
+
+    def test_소수점_정수는_1단을_건너뛰고_불량(self, mutate):
+        # jsonschema-rs는 15000.0을 integer로 허용하므로 소수 감지로 1단을 건너뛰어야 한다.
+        raw = mutate(lambda d: d["properties"]["items"][0].__setitem__("price", 15000.0))
+        dlq(classify(raw), "schema", "SCHEMA_TYPE", "properties.items[0].price")
+
+    @pytest.mark.parametrize("ts", ["0000-11-16T06:08:00.123Z", "2026-11-16T23:59:60.000Z"])
+    def test_1단이_허용하는_시각은_불량(self, mutate, ts):
+        # jsonschema-rs date-time은 연도 0000·초 60을 허용한다. 기존 형식 검사기 재확인으로 거부한다.
+        dlq(classify(mutate(lambda d: d.__setitem__("event_timestamp", ts))), "schema", "SCHEMA_FORMAT",
+            "event_timestamp")
+
+    def test_생성기_이벤트_판정_일치(self):
+        # 생성기의 정상·불량 혼합 이벤트 전체를 대조한다. 불일치는 _CheckedFast가 실패시킨다.
+        import random
+        from log_generator.generator import EventGenerator
+        from log_generator.pools import build_user_pool
+
+        gen = EventGenerator(random.Random(1), build_user_pool(1000))
+        outcomes = {classify(gen.next_event().payload)["outcome"] for _ in range(3000)}
+        assert outcomes == {"order", "excluded", "dlq"}
 
 
 class TestStandardSamples:
