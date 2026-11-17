@@ -65,5 +65,48 @@ services:
     cpus: 1
     mem_limit: 1g
 
+  spark:
+    build: ./apps/streaming
+    # 실행 중인 애플리케이션의 내장 Spark UI를 로컬에서 확인한다.
+    ports:
+      - "127.0.0.1:4040:4040"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      SPARK_KAFKA_BOOTSTRAP_SERVERS: ${SPARK_KAFKA_BOOTSTRAP_SERVERS:?SPARK_KAFKA_BOOTSTRAP_SERVERS is required}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:?KAFKA_TOPIC is required}
+      KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:?KAFKA_DLQ_TOPIC is required}
+      SPARK_STARTING_OFFSETS: ${SPARK_STARTING_OFFSETS:?SPARK_STARTING_OFFSETS is required}
+      SPARK_MAX_OFFSETS_PER_TRIGGER: ${SPARK_MAX_OFFSETS_PER_TRIGGER:?SPARK_MAX_OFFSETS_PER_TRIGGER is required}
+      SPARK_TRIGGER_INTERVAL: ${SPARK_TRIGGER_INTERVAL:?SPARK_TRIGGER_INTERVAL is required}
+      SPARK_SHUFFLE_PARTITIONS: ${SPARK_SHUFFLE_PARTITIONS:?SPARK_SHUFFLE_PARTITIONS is required}
+      SPARK_CHECKPOINT_DIR: ${SPARK_CHECKPOINT_DIR:?SPARK_CHECKPOINT_DIR is required}
+      SPARK_OUTPUT_DIR: ${SPARK_OUTPUT_DIR:?SPARK_OUTPUT_DIR is required}
+      # 앱·생성기 풀(의미 검증 기준)·PySpark를 import 경로에 둔다. pytest도 같은 경로를 쓴다.
+      PYTHONPATH: /opt/app/apps/streaming/src:/opt/app/apps/log_generator/src:/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.9-src.zip
+      # 코드가 읽기 전용 마운트라 바이트코드 캐시를 쓰지 않는다.
+      PYTHONDONTWRITEBYTECODE: '1'
+    # master·driver 메모리는 JVM 기동 전에 정해야 하므로 spark-submit 인자로 넘긴다.
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - ${SPARK_MASTER:?SPARK_MASTER is required}
+      - --driver-memory
+      - ${SPARK_DRIVER_MEMORY:?SPARK_DRIVER_MEMORY is required}
+      - /opt/app/apps/streaming/src/streaming/main.py
+    # 저장소와 같은 상대 구조(/opt/app)로 마운트해 transforms.py가 contracts/를 찾는다.
+    volumes:
+      - ./apps/streaming:/opt/app/apps/streaming:ro
+      - ./apps/log_generator/src:/opt/app/apps/log_generator/src:ro
+      - ./contracts:/opt/app/contracts:ro
+      - spark-checkpoints:/opt/spark/checkpoints
+      - spark-output:/opt/spark/output
+    cpus: 3
+    mem_limit: 3g
+
 volumes:
   kafka-data:
+  # 체크포인트와 3단계 정상 출력(Parquet)은 서로 다른 볼륨에 둔다. 출력 볼륨은 4단계 JDBC 전환 시 제거한다.
+  spark-checkpoints:
+  spark-output:

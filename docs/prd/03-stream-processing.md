@@ -7,6 +7,12 @@
 
 Kafka에서 로그를 읽어 주문 로그를 검증하고 변환한다.
 
+## Spark UI
+
+Compose의 `spark` 서비스에서 내장 Spark UI의 4040 포트를 `127.0.0.1:4040`으로 게시한다. 실행 중인 애플리케이션의 작업·스테이지·실행기 상태는 `http://localhost:4040`에서 확인한다. UI는 애플리케이션 실행 중에만 제공한다.
+
+참고: [Spark 모니터링 공식 문서](https://spark.apache.org/docs/latest/monitoring).
+
 ## 스택별 역할과 적재 방식
 
 제품 v1은 Spark Structured Streaming의 마이크로배치 모드와 `foreachBatch`를 사용한다. 정상 주문은 콜백에 전달된 배치 DataFrame을 Spark JDBC writer로 쓰고, ClickHouse 공식 JDBC Driver를 통해 적재한다. 아래는 선택한 설계이며 구현 완료를 의미하지 않는다.
