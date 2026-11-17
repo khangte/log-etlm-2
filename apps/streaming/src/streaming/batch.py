@@ -10,13 +10,14 @@ from pyspark.sql import DataFrame
 from streaming.config import Config
 from streaming.monitoring import summarize_batch
 from streaming.sinks import write_dlq, write_orders
-from streaming.transforms import DLQ, EXCLUDED, ORDER, build_dlq_records, classify_batch, select_orders
+from streaming.transforms import (DLQ, EXCLUDED, ORDER, build_dlq_records, classify_batch, deduplicate_events,
+                                  select_orders)
 
 log = logging.getLogger("streaming")
 
 
 def process_batch(batch: DataFrame, batch_id: int, config: Config, query_context: dict | None = None) -> None:
-    """분류·출력 action을 계측한다. 실패한 시도도 로그에 남기고 예외는 쿼리에 전달한다."""
+    """변환 → 중복 제거 → 저장 순서를 제어하고 분류·출력 action을 계측한다. 실패한 시도도 로그에 남기고 예외는 쿼리에 전달한다."""
     callback_started_at = datetime.now(timezone.utc)
     callback_clock = time.perf_counter()
     metrics = {**(query_context or {}), "batch_id": batch_id,
@@ -37,7 +38,7 @@ def process_batch(batch: DataFrame, batch_id: int, config: Config, query_context
         finally:
             metrics["classification_and_metrics_action_ms"] = (time.perf_counter() - action_clock) * 1000
         for outcome, writer, frame_builder, stage in (
-            (ORDER, write_orders, select_orders, "orders_write_action"),
+            (ORDER, write_orders, lambda frame: deduplicate_events(select_orders(frame)), "orders_write_action"),
             (DLQ, write_dlq, build_dlq_records, "dlq_write_action"),
         ):
             if counts.get(outcome):

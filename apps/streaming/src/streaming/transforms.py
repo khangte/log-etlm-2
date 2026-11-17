@@ -257,7 +257,7 @@ def classify_batch(source: DataFrame) -> DataFrame:
 
 
 def select_orders(classified: DataFrame) -> DataFrame:
-    """정상 주문을 구조화·평탄화해 이벤트 31개·Kafka 추적 4개 컬럼을 만들고 배치 내 event_id 중복을 제거한다."""
+    """정상 주문을 필터링·구조화·평탄화해 이벤트 31개·Kafka 추적 4개 출력 컬럼을 선택한다."""
     orders = classified.filter(F.col("result.outcome") == ORDER).withColumn(
         "event", F.from_json(F.col("raw_value").cast("string"), ORDER_EVENT_SCHEMA, {"mode": "FAILFAST"}))
     columns = []
@@ -268,7 +268,12 @@ def select_orders(classified: DataFrame) -> DataFrame:
         if name == "event_timestamp":
             value = F.to_timestamp(value, "yyyy-MM-dd'T'HH:mm:ss.SSSX")
         columns.append(value.alias(name))
-    return orders.select(*columns, *KAFKA_COLUMNS).dropDuplicates(["event_id"])
+    return orders.select(*columns, *KAFKA_COLUMNS)
+
+
+def deduplicate_events(events: DataFrame) -> DataFrame:
+    """배치 안의 같은 event_id 행을 하나만 남긴다. 배치 간 중복은 PRD에 따라 처리하지 않는다."""
+    return events.dropDuplicates(["event_id"])
 
 
 def build_dlq_records(classified: DataFrame) -> DataFrame:

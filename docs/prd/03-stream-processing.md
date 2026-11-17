@@ -341,7 +341,7 @@ Kafka timestamp 종류가 LogAppendTime(`timestampType=1`)이 아니면 이벤�
 
 ### 파일 구조와 실행·테스트
 
-원문 파싱·검증·분류와 DataFrame 변환을 `transforms.py` 하나에 모은다. `validation.py`·`classify.py`는 별도로 두지 않는다. `classify()`는 원문 검증과 정상·제외·불량 분류를 수행하고, `classify_batch()`는 이를 UDF로 DataFrame에 적용한다. `select_orders()`는 정상 필터·구조화·평탄화·배치 내 중복 제거, `build_dlq_records()`는 불량 필터·DLQ 메시지 구성을 담당한다. 중첩 필드 전개에는 `select()`를 사용한다. 처리 순서·출력·계측 계약은 유지한다.
+원문 파싱·검증·분류와 DataFrame 변환을 `transforms.py` 하나에 모은다. `validation.py`·`classify.py`는 별도로 두지 않는다. `classify()`는 원문 검증과 정상·제외·불량 분류를 수행하고, `classify_batch()`는 이를 UDF로 DataFrame에 적용한다. `select_orders()`는 정상 필터·구조화·평탄화·출력 컬럼 선택, `deduplicate_events()`는 배치 내 `event_id` 중복 제거, `build_dlq_records()`는 불량 필터·DLQ 메시지 구성을 담당한다. `batch.py`의 `process_batch()`는 변환 → 중복 제거 → 저장 순서를 제어한다. 중첩 필드 전개에는 `select()`를 사용한다. 처리 순서·출력·계측 계약은 유지한다.
 
 `schemas.py`는 원본 이벤트·분류 메타데이터의 Spark 스키마와 정상 주문 평탄화 매핑(`ORDER_COLUMNS`: 출력 컬럼 → 원본 경로)을 정의한다. `transforms.py`에서 DataFrame 실행 계획을 구성하며 실제 연산은 태스크와 Python worker에서 실행된다. 실행 진입점은 `main.py`로 유지한다.
 

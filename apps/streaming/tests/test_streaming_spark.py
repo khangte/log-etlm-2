@@ -55,7 +55,7 @@ def mixed_values():
 
 
 class TestClassifyAndSelect:
-    """classify_batch·select_orders."""
+    """classify_batch·select_orders·deduplicate_events."""
 
     def test_classify_batch_컬럼(self, spark):
         """원문·추적 컬럼과 result 구조체."""
@@ -108,7 +108,9 @@ class TestClassifyAndSelect:
         v = sample_bytes("valid_order_completed.json")
         o2 = json.loads(v)
         o2["event_id"] = "660e8400-e29b-41d4-a716-446655440000"
-        orders = transforms.select_orders(transforms.classify_batch(frame(spark, [v, v, dump(o2), v])))
+        selected = transforms.select_orders(transforms.classify_batch(frame(spark, [v, v, dump(o2), v])))
+        assert selected.count() == 4  # 중복 제거는 select_orders 가 아니라 deduplicate_events 책임
+        orders = transforms.deduplicate_events(selected)
         assert orders.count() == 2
         assert orders.select("event_id").distinct().count() == 2
 
