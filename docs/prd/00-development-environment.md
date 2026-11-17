@@ -46,7 +46,7 @@ swap=4GB
 - 앱별 `pyproject.toml`, `uv.lock`, `.python-version`을 Git에 포함한다.
 - 앱별 `.venv/`는 Git에서 제외한다.
 - 의존성 설치는 앱 디렉터리에서 `uv sync`, 실행은 `uv run`을 기준으로 한다.
-- Spark의 Python·PySpark·Java·Kafka 커넥터 버전은 Spark 도입 단계에서 호환성을 확인하고 함께 확정한다.
+- Spark의 Python·PySpark·Java·Kafka 커넥터 버전은 [Spark PRD의 3단계 구현 결정](03-stream-processing.md#3단계-구현-결정)에 고정했다. Spark 앱(`apps/streaming`)은 uv 대신 공식 Spark 이미지의 Python과 Dockerfile에 고정한 패키지를 사용하며 컨테이너 안에서 실행·테스트한다.
 
 ```text
 apps/log_generator/

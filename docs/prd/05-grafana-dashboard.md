@@ -37,7 +37,7 @@
 | 로그 생성기 | 생성 호출 직전 → 최종 UTF-8 bytes 반환 직후 | 생성·직렬화 소요시간. EPS 조절 대기는 제외 |
 | Producer → Kafka | 전송 API 호출 → delivery report 생성의 ACK 지연 | 클라이언트 대기·전송·브로커 확인 포함. [Kafka PRD](02-kafka-ingestion.md)의 `msg.latency()` 기준 |
 | 생성 → Kafka | Kafka LogAppendTime − `event_timestamp` | 생성 이후 브로커 추가까지의 지연. ACK 지연과 겹치므로 합산하지 않음 |
-| Kafka → Spark | Spark 배치 시작 시각 − Kafka LogAppendTime | 소비 대기 근사치. 배치 시작 후 추가된 이벤트는 범위 불일치로 별도 집계 |
+| Kafka → Spark | `foreachBatch` 콜백 진입 시각 − Kafka LogAppendTime | 소비 대기 근사치. 트리거 시작부터 콜백 진입까지의 준비 시간 포함. 미래 timestamp·누락은 별도 집계하며 트리거 시작 기준 지연으로 표시하지 않음 |
 | Spark 배치 | `StreamingQueryProgress.durationMs.triggerExecution` | 트리거 전체 소요시간. 출력·체크포인트 등 포함 범위를 명시하며 순수 정제 시간으로 표시하지 않음 |
 | Spark → ClickHouse | 정상 DataFrame의 JDBC write action 호출 직전 → 반환 또는 실패 | 선행 변환·스케줄링·태스크 재시도 등이 포함될 수 있는 출력 action 소요시간 |
 | ClickHouse INSERT | 실제 INSERT 요청 직전 → 성공 응답 또는 실패 | 요청별 소요시간. JDBC 내부 요청 경계 계측이 있을 때만 제공 |
