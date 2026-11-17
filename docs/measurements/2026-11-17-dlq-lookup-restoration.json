@@ -1,0 +1,107 @@
+{
+  "verified_at": "2026-11-17T06:42:01.979302+00:00",
+  "bootstrap_servers": "localhost:9092",
+  "dlq_topic": "dlq.ecommerce.orders.v1",
+  "consumer_config": {
+    "bootstrap.servers": "localhost:9092",
+    "group.id": "dlq-lookup-verification-10779b6ee1234576953f728d32e3a014",
+    "enable.auto.commit": false,
+    "enable.auto.offset.store": false,
+    "allow.auto.create.topics": false
+  },
+  "snapshot": {
+    "partition": 0,
+    "low": 2552,
+    "high_exclusive": 477433,
+    "scan_start": 475433,
+    "records_scanned": 3
+  },
+  "scope": "Existing generated anomalies; no new input, no reprocessing, no topic/config/checkpoint changes",
+  "samples": {
+    "SCHEMA_REQUIRED": {
+      "dlq_partition": 0,
+      "dlq_offset": 475433,
+      "key": "raw.ecommerce.orders.v1:2:3447551",
+      "record": {
+        "dlq_schema_version": "1.0.0",
+        "source_topic": "raw.ecommerce.orders.v1",
+        "source_partition": 2,
+        "source_offset": 3447551,
+        "source_timestamp": "2026-11-17T06:09:33.081Z",
+        "raw_value_base64": "eyJldmVudF9pZCI6IjhiNTk2OGNkLTBjMmItNDlkZS1hNmVlLTc5ZmY3NWFjNWFhYyIsImV2ZW50X3RpbWVzdGFtcCI6IjIwMjYtMTEtMTdUMDY6MDk6MzMuMDc3WiIsImV2ZW50X25hbWUiOiJvcmRlcl9jb21wbGV0ZWQiLCJzY2hlbWFfdmVyc2lvbiI6IjEuMC4wIiwiY29udGV4dCI6eyJ1c2VyX2lkIjoidXNyXzAwNDE3Iiwic2Vzc2lvbl9pZCI6InNlc3NfMDg1ZTBhYzFlNzI4NGY4M2IwY2IwYjExNmU3M2UxMGMiLCJpc19sb2dnZWRfaW4iOnRydWUsInVzZXJfdGllciI6IlNUQU5EQVJEIiwiZGV2aWNlIjp7Im9zIjoiaU9TIiwib3NfdmVyc2lvbiI6IjE4LjEuMSIsImFwcF92ZXJzaW9uIjoiNC4xMi4wIiwiZGV2aWNlX21vZGVsIjoiaVBob25lMTYsMSIsImRldmljZV90eXBlIjoibW9iaWxlIn0sIm5ldHdvcmsiOnsiY2FycmllciI6InN5bnRoZXRpYyIsImNvdW50cnkiOiJLUiIsInJlZ2lvbiI6IkNodW5nY2hlb25nbmFtLWRvIiwiY2l0eSI6IkNoZW9uYW4tc2kifSwicGFnZSI6eyJjdXJyZW50X3VybCI6Ii9jaGVja291dC9jb21wbGV0ZSIsInJlZmVycmVyX3VybCI6Ii9jYXJ0IiwidXRtX3NvdXJjZSI6ImRpcmVjdCIsInV0bV9tZWRpdW0iOiJub25lIn19LCJwcm9wZXJ0aWVzIjp7InBheW1lbnRfbWV0aG9kIjoibmF2ZXJfcGF5IiwiY3VycmVuY3kiOiJLUlciLCJ0b3RhbF9hbW91bnQiOjE2MjAwMCwiZGlzY291bnRfYW1vdW50IjoxODAwMCwiaXRlbXMiOlt7InByb2R1Y3RfaWQiOiJwcm9kXzAwMDQiLCJwcm9kdWN0X25hbWUiOiJFYXJidWRzIiwiY2F0ZWdvcnkiOiJlbGVjdHJvbmljcyIsInByaWNlIjo5MDAwMCwicXVhbnRpdHkiOjJ9XX19",
+        "error_stage": "schema",
+        "error_code": "SCHEMA_REQUIRED",
+        "error_path": "properties.order_id",
+        "error_message": "'order_id' is a required property",
+        "event_name": "order_completed",
+        "schema_version": "1.0.0",
+        "detected_at": "2026-11-17T06:14:01.131Z",
+        "processor_version": "streaming 0.1.0"
+      },
+      "restored_byte_length": 828,
+      "original_sha256": "9222bc50a0e1531514c93ce3e9e2a60b555885f729e4d68119cb157d763bffbc",
+      "restored_sha256": "9222bc50a0e1531514c93ce3e9e2a60b555885f729e4d68119cb157d763bffbc",
+      "bytes_equal": true,
+      "source_position_equal": true,
+      "source_timestamp_equal": true,
+      "strict_base64_decode": true
+    },
+    "SCHEMA_TYPE": {
+      "dlq_partition": 0,
+      "dlq_offset": 475434,
+      "key": "raw.ecommerce.orders.v1:2:3447579",
+      "record": {
+        "dlq_schema_version": "1.0.0",
+        "source_topic": "raw.ecommerce.orders.v1",
+        "source_partition": 2,
+        "source_offset": 3447579,
+        "source_timestamp": "2026-11-17T06:09:33.087Z",
+        "raw_value_base64": "eyJldmVudF9pZCI6IjFmNGQ3OTM5LTgyY2EtNGI2YS05ODI3LWQ4ZTlhYmY4NDcwMyIsImV2ZW50X3RpbWVzdGFtcCI6IjIwMjYtMTEtMTdUMDY6MDk6MzMuMDgxWiIsImV2ZW50X25hbWUiOiJvcmRlcl9jb21wbGV0ZWQiLCJzY2hlbWFfdmVyc2lvbiI6IjEuMC4wIiwiY29udGV4dCI6eyJ1c2VyX2lkIjoidXNyXzAwMTgzIiwic2Vzc2lvbl9pZCI6InNlc3NfM2RlMTQ3YWY5MWMxNGYzZWExOGE1NzBkN2JmOTFkY2MiLCJpc19sb2dnZWRfaW4iOnRydWUsInVzZXJfdGllciI6IlNUQU5EQVJEIiwiZGV2aWNlIjp7Im9zIjoiaU9TIiwib3NfdmVyc2lvbiI6IjE4LjEuMSIsImFwcF92ZXJzaW9uIjoiNC4xMi4wIiwiZGV2aWNlX21vZGVsIjoiaVBob25lMTYsMSIsImRldmljZV90eXBlIjoibW9iaWxlIn0sIm5ldHdvcmsiOnsiY2FycmllciI6InN5bnRoZXRpYyIsImNvdW50cnkiOiJLUiIsInJlZ2lvbiI6Ikd5ZW9uZ2dpIiwiY2l0eSI6Ikd3YW5nbXllb25nIn0sInBhZ2UiOnsiY3VycmVudF91cmwiOiIvY2hlY2tvdXQvY29tcGxldGUiLCJyZWZlcnJlcl91cmwiOiIvY2FydCIsInV0bV9zb3VyY2UiOiJkaXJlY3QiLCJ1dG1fbWVkaXVtIjoibm9uZSJ9fSwicHJvcGVydGllcyI6eyJvcmRlcl9pZCI6Im9yZF8xZjRkNzkzOTgyY2E0YjZhOTgyN2Q4ZTlhYmY4NDcwMyIsInBheW1lbnRfbWV0aG9kIjoibmF2ZXJfcGF5IiwiY3VycmVuY3kiOiJLUlciLCJ0b3RhbF9hbW91bnQiOiJpbnZhbGlkX2Ftb3VudCIsImRpc2NvdW50X2Ftb3VudCI6MzAwMCwiaXRlbXMiOlt7InByb2R1Y3RfaWQiOiJwcm9kXzAwMDIiLCJwcm9kdWN0X25hbWUiOiJXaXJlbGVzcyBNb3VzZSIsImNhdGVnb3J5IjoiZWxlY3Ryb25pY3MiLCJwcmljZSI6MzAwMDAsInF1YW50aXR5IjoxfV19fQ==",
+        "error_stage": "schema",
+        "error_code": "SCHEMA_TYPE",
+        "error_path": "properties.total_amount",
+        "error_message": "'invalid_amount' is not of type 'integer'",
+        "event_name": "order_completed",
+        "schema_version": "1.0.0",
+        "detected_at": "2026-11-17T06:14:01.131Z",
+        "processor_version": "streaming 0.1.0"
+      },
+      "restored_byte_length": 886,
+      "original_sha256": "425ac3d0a68155a822447f59e4666c480c1c238720e250855c5aa38282b69080",
+      "restored_sha256": "425ac3d0a68155a822447f59e4666c480c1c238720e250855c5aa38282b69080",
+      "bytes_equal": true,
+      "source_position_equal": true,
+      "source_timestamp_equal": true,
+      "strict_base64_decode": true
+    },
+    "INVALID_JSON": {
+      "dlq_partition": 0,
+      "dlq_offset": 475435,
+      "key": "raw.ecommerce.orders.v1:2:3447581",
+      "record": {
+        "dlq_schema_version": "1.0.0",
+        "source_topic": "raw.ecommerce.orders.v1",
+        "source_partition": 2,
+        "source_offset": 3447581,
+        "source_timestamp": "2026-11-17T06:09:33.087Z",
+        "raw_value_base64": "eyJldmVudF9pZCI6ImEyNTU5ZjEyLTM1NzEtNDQ1Ni05Y2Q2LWNhNzU2NDY2NzQ0ZCIsImV2ZW50X3RpbWVzdGFtcCI6IjIwMjYtMTEtMTdUMDY6MDk6MzMuMDgxWiIsImV2ZW50X25hbWUiOiJvcmRlcl9jb21wbGV0ZWQiLCJzY2hlbWFfdmVyc2lvbiI6IjEuMC4wIiwiY29udGV4dCI6eyJ1c2VyX2lkIjoidXNyXzAwMTkyIiwic2Vzc2lvbl9pZCI6InNlc3NfZmQ5ZjM4YjMzMDY2NGRjZGFhMDc2M2Y1OWIwZTk3YWMiLCJpc19sb2dnZWRfaW4iOnRydWUsInVzZXJfdGllciI6IlNUQU5EQVJEIiwiZGV2aWNlIjp7Im9zIjoiaU9TIiwib3NfdmVyc2lvbiI6IjE4LjEuMSIsImFwcF92ZXJzaW9uIjoiNC4xMi4wIiwiZGV2aWNlX21vZGVsIjoiaVBob25lMTYsMSIsImRldmljZV90eXBlIjoibW9iaWxlIn0sIm5ldHdvcmsiOnsiY2FycmllciI6InN5bnRoZXRpYyIsImNvdW50cnkiOiJLUiIsInJlZ2lvbiI6IkluY2hlb24iLCJjaXR5IjoiWWVvbnN1LWd1In0sInBhZ2UiOnsiY3VycmVudF91cmwiOiIvY2hlY2tvdXQvY29tcGxldGUiLCJyZWZlcnJlcl91cmwiOiIvY2FydCIsInV0bV9zb3VyY2UiOiJkaXJlY3QiLCJ1dG1fbWVkaXVtIjoibm9uZSJ9fSwicHJvcGVydGllcyI6eyJvcmRlcl9pZCI6Im9yZF9hMjU1OWYxMjM1NzE0NDU2OWNkNmNhNzU2NDY2NzQ0ZCIsInBheW1lbnRfbWV0aG9kIjoiY3JlZGl0X2NhcmQiLCJjdXJyZW5jeSI6IktSVyIsInRvdGFsX2Ftb3VudCI6OTAwMCwiZGlzY291bnRfYW1vdW50IjoxMDAwLCJpdGVtcyI6W3sicHJvZHVjdF9pZCI6InByb2RfMDAwOCIsInByb2R1Y3RfbmFtZSI6Ik11ZyIsImNhdGVnb3J5IjoiaG9tZSIsInByaWNlIjoxMDAwMCwicXVhbnRpdHkiOjF9XX0h",
+        "error_stage": "parse",
+        "error_code": "INVALID_JSON",
+        "error_path": null,
+        "error_message": "Expecting ',' delimiter: line 1 column 855 (char 854)",
+        "event_name": null,
+        "schema_version": null,
+        "detected_at": "2026-11-17T06:14:01.131Z",
+        "processor_version": "streaming 0.1.0"
+      },
+      "restored_byte_length": 855,
+      "original_sha256": "c95038451cf3b3e817d8695455bad73a796b7d065b2e7d78104dd3f621d613f3",
+      "restored_sha256": "c95038451cf3b3e817d8695455bad73a796b7d065b2e7d78104dd3f621d613f3",
+      "bytes_equal": true,
+      "source_position_equal": true,
+      "source_timestamp_equal": true,
+      "strict_base64_decode": true
+    }
+  },
+  "result": "passed"
+}
