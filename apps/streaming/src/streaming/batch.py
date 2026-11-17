@@ -32,7 +32,7 @@ def process_batch(batch: DataFrame, batch_id: int, config: Config, query_context
         try:
             # 집계·정상 출력·DLQ 쓰기마다 UDF가 다시 실행되지 않도록 분류 결과를 캐시한다.
             classified = classify_batch(batch).persist()
-            counts, latency = summarize_batch(classified, callback_started_at)
+            counts, latency = summarize_batch(classified, callback_started_at, config.latency_metrics_enabled)
             metrics["kafka_to_callback_start_ms"] = latency
         finally:
             metrics["classification_and_metrics_action_ms"] = (time.perf_counter() - action_clock) * 1000

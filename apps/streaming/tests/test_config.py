@@ -14,6 +14,7 @@ VALID = {
     "SPARK_SHUFFLE_PARTITIONS": "3",
     "SPARK_CHECKPOINT_DIR": "/opt/spark/checkpoints/orders",
     "SPARK_OUTPUT_DIR": "/opt/spark/output/orders",
+    "SPARK_LATENCY_METRICS_ENABLED": "true",
 }
 
 
@@ -63,6 +64,19 @@ def test_starting_offsets_허용값(bad):
     """earliest/latest 외 값 거부."""
     with pytest.raises(ConfigError, match="SPARK_STARTING_OFFSETS"):
         load_config({**VALID, "SPARK_STARTING_OFFSETS": bad})
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("true", True), ("false", False)])
+def test_지연_계측_켬_끔(raw, expected):
+    """true/false를 불리언으로 읽는다."""
+    assert load_config({**VALID, "SPARK_LATENCY_METRICS_ENABLED": raw}).latency_metrics_enabled is expected
+
+
+@pytest.mark.parametrize("bad", ["True", "FALSE", "1", "0", "yes", "off"])
+def test_지연_계측_허용값(bad):
+    """소문자 true/false 외 값 거부."""
+    with pytest.raises(ConfigError, match="SPARK_LATENCY_METRICS_ENABLED"):
+        load_config({**VALID, "SPARK_LATENCY_METRICS_ENABLED": bad})
 
 
 def test_빈_매핑은_프로세스_환경을_읽지_않는다(monkeypatch):

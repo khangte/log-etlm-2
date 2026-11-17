@@ -83,6 +83,8 @@ services:
       SPARK_SHUFFLE_PARTITIONS: ${SPARK_SHUFFLE_PARTITIONS:?SPARK_SHUFFLE_PARTITIONS is required}
       SPARK_CHECKPOINT_DIR: ${SPARK_CHECKPOINT_DIR:?SPARK_CHECKPOINT_DIR is required}
       SPARK_OUTPUT_DIR: ${SPARK_OUTPUT_DIR:?SPARK_OUTPUT_DIR is required}
+      # 기존 로컬 .env에 없어도 기동되도록 Compose 기본값 true를 둔다. 계측 오버헤드 대조군에서만 false로 바꾼다.
+      SPARK_LATENCY_METRICS_ENABLED: ${SPARK_LATENCY_METRICS_ENABLED:-true}
       # 앱·생성기 풀(의미 검증 기준)·PySpark를 import 경로에 둔다. pytest도 같은 경로를 쓴다.
       PYTHONPATH: /opt/app/apps/streaming/src:/opt/app/apps/log_generator/src:/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.9-src.zip
       # 코드가 읽기 전용 마운트라 바이트코드 캐시를 쓰지 않는다.

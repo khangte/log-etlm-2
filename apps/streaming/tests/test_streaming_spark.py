@@ -1,8 +1,10 @@
 """streaming 기능별 모듈의 Spark 함수 테스트. 정적 DataFrame 과 local 세션을 사용한다(Kafka 불필요)."""
 
 import base64
+import dataclasses
 import datetime as dt
 import json
+import types
 
 import pytest
 from pyspark.sql import SparkSession
@@ -263,7 +265,7 @@ class TestProcessBatch:
             "KAFKA_DLQ_TOPIC": "dlq.ecommerce.orders.v1", "SPARK_STARTING_OFFSETS": "earliest",
             "SPARK_MAX_OFFSETS_PER_TRIGGER": "100", "SPARK_TRIGGER_INTERVAL": "1 seconds",
             "SPARK_SHUFFLE_PARTITIONS": "3", "SPARK_CHECKPOINT_DIR": str(tmp_path / "ckpt"),
-            "SPARK_OUTPUT_DIR": str(tmp_path / "out")})
+            "SPARK_OUTPUT_DIR": str(tmp_path / "out"), "SPARK_LATENCY_METRICS_ENABLED": "true"})
 
     def test_건수_로그와_출력(self, spark, config, monkeypatch, caplog):
         """배치 로그 JSON 의 input = order + excluded + dlq, 출력 행수·DLQ 건수 일치, 중복 제거."""
@@ -279,6 +281,22 @@ class TestProcessBatch:
         out = spark.read.parquet(config.output_dir)
         assert out.count() == 2  # 배치 내 event_id 중복 제거: 3 → 2
         assert len(out.columns) == 35
+        assert len(captured["dlq"]) == 5
+
+    def test_지연_계측_끄면_건수와_출력은_같고_지연은_null(self, spark, config, monkeypatch, caplog):
+        """끔 설정은 지연 집계만 생략한다. 건수 로그·정상 출력·DLQ 건수는 켬과 같다."""
+        captured = {}
+        monkeypatch.setattr(batch, "write_dlq", lambda records, cfg: captured.setdefault("dlq", records.collect()))
+        off = dataclasses.replace(config, latency_metrics_enabled=False)
+        with caplog.at_level("INFO", logger="streaming"):
+            batch.process_batch(frame(spark, mixed_values()), 7, off)
+        messages = [r.getMessage() for r in caplog.records]
+        log = json.loads(next(m for m in messages if m.startswith("batch "))[6:])
+        metrics = json.loads(next(m for m in messages if m.startswith("latency "))[8:])
+        assert log == {"batch_id": 7, "input": 8, "order": 2, "excluded": 1, "dlq": 5}
+        assert metrics["status"] == "succeeded" and metrics["kafka_to_callback_start_ms"] is None
+        assert metrics["classification_and_metrics_action_ms"] >= 0
+        assert spark.read.parquet(off.output_dir).count() == 2
         assert len(captured["dlq"]) == 5
 
     def test_DLQ_없으면_DLQ_쓰기_생략(self, spark, config, monkeypatch):
@@ -372,6 +390,18 @@ class TestLatency:
             c.unpersist()
 
     @pytest.mark.parametrize("values", [[], [b"{"]])
+    def test_끄면_지연_집계를_생략하고_건수는_같다(self, spark, values):
+        """latency_enabled=False는 켬과 같은 분류 건수와 None 지연을 돌려준다."""
+        c = transforms.classify_batch(frame(spark, mixed_values() + values)).persist()
+        try:
+            started = TS.replace(tzinfo=dt.timezone.utc)
+            on_counts, _ = monitoring.summarize_batch(c, started)
+            off_counts, off_latency = monitoring.summarize_batch(c, started, latency_enabled=False)
+            assert off_counts == on_counts and off_latency is None
+        finally:
+            c.unpersist()
+
+    @pytest.mark.parametrize("values", [[], [b"{"]])
     def test_유효시차가_없으면_null(self, spark, values):
         """빈 입력과 미래 timestamp만 있는 입력은 분위수에 가짜 0을 만들지 않는다."""
         c = transforms.classify_batch(frame(spark, values))
@@ -413,12 +443,14 @@ def test_스트리밍_지연주입과_실행키_연결(spark, tmp_path, monkeypa
         time.sleep(0.15)
 
     monkeypatch.setattr(batch, "write_orders", slow_write)
+    # 쓰기 함수를 대체했으므로 콜백이 읽는 설정은 지연 계측 여부뿐이다.
+    stub_config = types.SimpleNamespace(latency_metrics_enabled=True)
     source = spark.readStream.schema(INPUT_SCHEMA).json(str(input_dir))
     query = None
     try:
         with caplog.at_level("INFO", logger="streaming"):
             query = (source.writeStream
-                     .foreachBatch(lambda df, bid: batch.process_batch(df, bid, None, context))
+                     .foreachBatch(lambda df, bid: batch.process_batch(df, bid, stub_config, context))
                      .option("checkpointLocation", str(tmp_path / "checkpoint"))
                      .trigger(availableNow=True).start())
             assert query.awaitTermination(60)

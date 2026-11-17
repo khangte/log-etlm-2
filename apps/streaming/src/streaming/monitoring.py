@@ -10,8 +10,15 @@ from pyspark.sql.streaming import StreamingQueryListener
 
 log = logging.getLogger("streaming")
 
-def summarize_batch(classified: DataFrame, callback_started_at: datetime) -> tuple[dict, dict]:
-    """기존 분류 건수 action에서 전체·분류별 지연을 집계한다. 드라이버에는 최대 4행만 전달한다."""
+def summarize_batch(classified: DataFrame, callback_started_at: datetime,
+                    latency_enabled: bool = True) -> tuple[dict, dict | None]:
+    """기존 분류 건수 action에서 전체·분류별 지연을 집계한다. 드라이버에는 최대 4행만 전달한다.
+
+    latency_enabled가 False면 같은 action에서 분류별 건수만 집계하고 지연은 None으로 돌려준다.
+    """
+    if not latency_enabled:
+        rows = classified.groupBy(F.col("result.outcome").alias("outcome")).count().collect()
+        return {row["outcome"]: row["count"] for row in rows}, None
     # 콜백 진입 시각은 action 이전에 고정한다. Spark의 지연 실행 시각으로 대체하지 않는다.
     started_ms = int(callback_started_at.timestamp() * 1000)
     delay = F.lit(started_ms) - F.unix_millis("kafka_append_timestamp")

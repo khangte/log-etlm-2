@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 STARTING_OFFSETS = ("earliest", "latest")
+BOOLEANS = {"true": True, "false": False}
 
 
 class ConfigError(ValueError):
@@ -29,6 +30,7 @@ class Config:
     shuffle_partitions: int
     checkpoint_dir: str
     output_dir: str  # 3단계 정상 주문 Parquet 경로. 4단계 JDBC 전환 시 제거한다.
+    latency_metrics_enabled: bool  # false면 지연 분위수 집계를 생략한다(계측 오버헤드 대조군).
 
 
 def _value(environ: Mapping[str, str], key: str) -> str:
@@ -51,6 +53,14 @@ def _positive_int(environ: Mapping[str, str], key: str) -> int:
     return value
 
 
+def _bool(environ: Mapping[str, str], key: str) -> bool:
+    """소문자 true/false만 허용하는 불리언 설정을 읽는다."""
+    raw = _value(environ, key)
+    if raw not in BOOLEANS:
+        raise ConfigError(f"{key} must be one of {tuple(BOOLEANS)}: {raw!r}")
+    return BOOLEANS[raw]
+
+
 def load_config(environ: Mapping[str, str] | None = None) -> Config:
     """환경변수에서 설정을 읽는다. 코드 기본값은 제공하지 않는다."""
     env = os.environ if environ is None else environ
@@ -67,4 +77,5 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         shuffle_partitions=_positive_int(env, "SPARK_SHUFFLE_PARTITIONS"),
         checkpoint_dir=_value(env, "SPARK_CHECKPOINT_DIR"),
         output_dir=_value(env, "SPARK_OUTPUT_DIR"),
+        latency_metrics_enabled=_bool(env, "SPARK_LATENCY_METRICS_ENABLED"),
     )
