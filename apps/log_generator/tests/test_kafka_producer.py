@@ -2,6 +2,7 @@
 
 import io
 import json
+import signal
 import unittest
 from collections import Counter
 from unittest.mock import patch
@@ -9,7 +10,7 @@ from unittest.mock import patch
 from confluent_kafka import KafkaError
 
 from log_generator.config import KafkaConfig, load_config
-from log_generator.main import run
+from log_generator.main import main, run
 from log_generator.outputs.kafka_producer import KafkaOutput, KafkaOutputError, percentiles
 from test_generator import ENV_VALUES
 
@@ -212,6 +213,68 @@ class RunWithKafkaTests(unittest.TestCase):
         final = json.loads(err.getvalue().splitlines()[-1])
         self.assertEqual((final["kafka"]["queued"], final["kafka"]["acked"]), (500, 500))
         self.assertEqual(final["kafka"]["acks"], "all")
+
+    def test_sigint_finishes_enqueue_ack_and_flush_without_corrupting_counts(self):
+        for stage in ("enqueue", "ack", "flush", "flush_remaining", "delivery_failure"):
+            with self.subTest(stage=stage):
+                out, producer, _ = make()
+                err = io.StringIO()
+                previous_handler = signal.getsignal(signal.SIGINT)
+
+                def interrupt_then_call(original):
+                    """실제 신호를 보내고 중단 없이 원래 처리가 끝나는지 확인한다."""
+                    def call(*args, **kwargs):
+                        signal.raise_signal(signal.SIGINT)
+                        signal.raise_signal(signal.SIGINT)
+                        return original(*args, **kwargs)
+                    return call
+
+                if stage == "enqueue":
+                    original = producer.produce
+
+                    def produce_then_interrupt(*args, **kwargs):
+                        """큐 등록 성공과 queued 증가 사이에 SIGINT를 발생시킨다."""
+                        original(*args, **kwargs)
+                        signal.raise_signal(signal.SIGINT)
+
+                    producer.produce = produce_then_interrupt
+                elif stage == "flush_remaining":
+                    producer.deliver_on_flush = False
+                    producer.poll = lambda timeout=0: None
+                    producer.flush = interrupt_then_call(producer.flush)
+                elif stage == "delivery_failure":
+                    producer.result = KafkaError(KafkaError._MSG_TIMED_OUT, "timed out")
+                    producer.flush = interrupt_then_call(producer.flush)
+                    producer.poll = lambda timeout=0: None
+                elif stage == "flush":
+                    producer.flush = interrupt_then_call(producer.flush)
+
+                latency = FakeMsg.latency
+
+                def latency_then_interrupt(msg):
+                    """ACK 집계 전에 SIGINT를 발생시킨다."""
+                    signal.raise_signal(signal.SIGINT)
+                    return latency(msg)
+
+                with patch("log_generator.main.load_config", return_value=self.config()), \
+                     patch("log_generator.main.KafkaOutput", return_value=out), \
+                     patch("log_generator.main.sys.stderr", err), \
+                     patch.object(FakeMsg, "latency", latency_then_interrupt if stage == "ack" else latency):
+                    code = main()
+
+                self.assertEqual(signal.getsignal(signal.SIGINT), previous_handler)
+                final = json.loads(err.getvalue().splitlines()[-1])
+                if stage in ("flush_remaining", "delivery_failure"):
+                    self.assertEqual((code, final["status"], final["output_errors"]), (1, "output_error", 1))
+                    self.assertGreater(final["kafka"]["undelivered"] + final["kafka"]["failed"], 0)
+                else:
+                    self.assertEqual((code, final["status"]), (130, "interrupted"))
+                    self.assertGreater(final["events_written"], 0)
+                    self.assertEqual(final["events_written"], len(producer.produced))
+                    self.assertEqual((out.generated, out.queued, out.acked), (final["events_written"],) * 3)
+                    self.assertEqual((final["kafka"]["undelivered"], final["output_errors"]), (0, 0))
+                    if stage == "enqueue":
+                        self.assertEqual(final["events_written"], 1)
 
     def test_run_exits_with_output_error_on_delivery_failure(self):
         out, _, _ = make(result=KafkaError(KafkaError._MSG_TIMED_OUT, "timed out"))

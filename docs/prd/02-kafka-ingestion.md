@@ -116,7 +116,7 @@ Spark 최초 실행은 `startingOffsets=earliest`, 재시작은 체크포인트 
 | 배치·압축 | `linger.ms=5`, `compression.type=lz4`로 시작하고 실제 처리량·CPU 사용량 측정 | 5ms는 배치를 모을 시간을 주면서 짧은 대기를 유지하기 위한 값이다. 5,000 EPS라면 평균 약 25건이 생성되는 시간이며 실제 배치는 파티션·스케줄링에 따라 달라진다. LZ4는 JSON의 반복 필드 압축을 시도할 초기 후보이며 무압축 대비 CPU·전송량·지연을 비교한다. |
 | 실패 처리 | `delivery.timeout.ms=30000`, 큐 포화 시 poll하며 최대 30초 대기; 최종 실패 시 생성 중단 및 비정상 종료 | 일시적 단절의 재시도 시간을 허용하면서 개발 중 장애가 무한 대기로 보이지 않게 한다. delivery 제한과 큐 등록 대기는 별도 구간이므로 총 대기가 30초를 넘을 수 있다. 실패 후 계속 생성하면 전달되지 않은 로그가 늘어나므로 중단한다. |
 | 클라이언트 오류 | `error_cb` 등록; `fatal()` 오류는 즉시 생성 중단 및 비정상 종료, 그 외 오류(예: 전체 브로커 연결 끊김)는 stderr 기록·건수 집계 후 delivery 제한으로 판단 | 브로커 단절과 idempotence fatal 오류는 개별 메시지가 아닌 `error_cb`로 전달되어 delivery 콜백만으로는 놓친다. fatal 이후 Producer는 더 이상 전송할 수 없다. |
-| 종료 | 정상 종료·Ctrl+C에서 최대 30초 flush, 실패·미전달 건수를 stderr에 기록 | 비동기 큐에 남은 로그의 전송 기회를 주면서 종료 대기를 제한한다. flush는 전달 제한시간을 갱신하지 않으며 전송 성공을 보장하지 않는다. 실패 또는 잔여 건이 있으면 성공 종료로 처리하지 않는다. |
+| 종료 | 정상 종료·Ctrl+C에서 최대 30초 flush, 실패·미전달 건수를 stderr에 기록. SIGINT는 종료 요청으로 받아 진행 중인 이벤트의 큐 등록·통계와 ACK 콜백을 마친 뒤 생성을 중단한다. flush 중 추가 SIGINT도 콜백을 중단하지 않는다. | 비동기 큐에 남은 로그의 전송 기회를 주면서 종료 대기를 제한한다. flush는 전달 제한시간을 갱신하지 않으며 전송 성공을 보장하지 않는다. Ctrl+C 후 flush 성공은 종료 코드 130, 실제 출력 실패·잔여 건은 1로 구분한다. |
 | 관측 | 생성·큐 등록·ACK 성공·실패·미전달 건수 분리, ACK 지연 p50/p95/p99와 큐 길이 집계 | 큐 등록을 전송 성공으로 오인하지 않도록 한다. p50은 일반적인 지연, p95/p99는 느린 구간, 큐 길이는 적체를 드러낸다. |
 | 재시도 관측 | `statistics.interval.ms=1000`으로 librdkafka 통계 콜백을 켜고 재시도 지표 수집; delivery 콜백 실패와 구분 | 이 값을 설정하지 않으면 통계 콜백이 호출되지 않는다. 1초는 생성기 상태 출력 주기와 맞춘 값이다. 최종 성공 전에 일어난 재시도는 최종 delivery 결과만으로 파악할 수 없다. 브로커·요청 단위 통계이므로 메시지별 정확한 재시도 건수로 해석하지 않는다. |
 | 성능 기준 | 5초 준비 후 60초 측정, ACK 기준 5,000 EPS의 ±5%, ACK 지연 p95 100ms 이하 | 2단계 완료 기준으로 사용한다. 준비 5초는 초기 연결·메타데이터 조회의 영향을 줄이기 위한 가정이며 준비 완료 여부도 확인한다. 60초는 1단계 생성기와 비교할 약 30만 건의 관측 구간이다. ±5%는 초기 스케줄링·측정 오차 허용 범위이고, 100ms는 종단 간 10초 목표 중 수집 구간에 배정한 초기 지연 예산이다. Kafka의 보장 성능이나 60초 안정성만으로 장시간 안정성을 입증하는 기준은 아니다. |
@@ -124,6 +124,8 @@ Spark 최초 실행은 `startingOffsets=earliest`, 재시작은 체크포인트 
 Producer 설정의 동작은 [librdkafka 설정 문서](https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html)와 [동작 설명](https://docs.confluent.io/platform/current/clients/librdkafka/html/md_INTRODUCTION.html)을 참고한다. 이 문서의 30초 제한과 성능 목표는 프로젝트의 초기 선택값이며 라이브러리 기본값 또는 공식 권장 성능을 의미하지 않는다.
 
 성능 기준은 아직 달성 결과가 아니다. 프로세스 종료 후 미전달 로그의 자동 복구 저장은 별도 구현이 필요하며 이번 제안에 포함하지 않는다.
+
+SIGINT 검증은 큐 등록 직후, ACK 집계 전, flush 중에 실제 신호를 발생시켜 수행한다. 종료 후 생성·큐 등록·ACK·출력 통계가 일치하고 미전달이 0인지 확인하며, 실제 delivery 실패와 flush 잔여 건은 계속 오류로 보고해야 한다. 기본 `KeyboardInterrupt`는 임의 위치에서 발생할 수 있으므로 [Python 신호 처리 문서](https://docs.python.org/3.12/library/signal.html#note-on-signal-handlers-and-exceptions)에 따라 예외를 발생시키지 않는 종료 요청 핸들러를 사용한다.
 
 참고: [공식 Docker 문서](https://kafka.apache.org/44/getting-started/docker/), [공식 단일 노드 구성 예시](https://github.com/apache/kafka/blob/4.4.0/docker/examples/docker-compose-files/single-node/plaintext/docker-compose.yml).
 

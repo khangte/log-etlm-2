@@ -8,10 +8,11 @@ stdout·파일에는 페이로드 + LF만 쓰고, Kafka에는 LF 없이 페이�
 import json
 import math
 import random
+import signal
 import sys
 import time
 from collections import Counter
-from typing import BinaryIO, TextIO
+from typing import BinaryIO, Callable, TextIO
 
 from confluent_kafka import KafkaException
 
@@ -101,7 +102,8 @@ def _log(err: TextIO, data: dict) -> None:
     err.flush()
 
 
-def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | None = None) -> tuple[Stats, str]:
+def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | None = None,
+        stop_requested: Callable[[], bool] = lambda: False) -> tuple[Stats, str]:
     """설정 속도로 이벤트를 out(또는 kafka)에 기록한다. (통계, 종료 상태)를 반환한다.
 
     kafka가 있으면 out은 쓰지 않는다. Stats의 건수는 큐 등록 기준이고 ACK 성공 건수는 kafka 지표에 있다.
@@ -118,6 +120,8 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
 
     try:
         while config.max_events is None or stats.events < config.max_events:
+            if stop_requested():
+                break
             now = time.monotonic()
             if now < next_tick:
                 # kafka는 대기 시간에 delivery 콜백을 처리한다.
@@ -138,6 +142,8 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
                 due = min(due, config.max_events - stats.events)
 
             for _ in range(due):
+                if stop_requested():
+                    break
                 event = generator.next_event()
                 if kafka:
                     kafka.send(event.payload)
@@ -151,6 +157,8 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
                 if next_status <= now:  # 출력 지연으로 여러 주기가 밀리면 몰아서 출력하지 않고 현재 기준으로 다시 센다.
                     next_status = now + config.status_interval_sec
         sink.flush()
+        if stop_requested():
+            status = "interrupted"
     except KeyboardInterrupt:
         status = "interrupted"
         try:
@@ -169,6 +177,7 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
 
 
 def main() -> int:
+    """출력 대상을 준비하고 SIGINT 종료 요청을 안전한 처리 경계에서 반영한다."""
     try:
         config = load_config()
     except ConfigError as exc:
@@ -192,7 +201,18 @@ def main() -> int:
     else:
         out = sys.stdout.buffer
 
-    _, status = run(config, out, sys.stderr, kafka)
+    interrupted = False
+
+    def request_stop(signum, frame):
+        """큐 등록과 delivery 콜백을 중단하지 않고 종료 요청만 기록한다."""
+        nonlocal interrupted
+        interrupted = True
+
+    previous_handler = signal.signal(signal.SIGINT, request_stop)
+    try:
+        _, status = run(config, out, sys.stderr, kafka, lambda: interrupted)
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
     if config.output == "file":
         try:
             out.close()
