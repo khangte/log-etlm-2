@@ -675,6 +675,7 @@ docker compose stop spark                                      # 정지. 체크�
 - 환경: 시험 전용 토픽 `test.offset-loss.raw.v1`·`test.offset-loss.dlq.v1`(파티션 1, `message.timestamp.type=LogAppendTime`)을 만들고 `KAFKA_TOPIC`·`KAFKA_DLQ_TOPIC`만 바꿔 실행한다. 시험 후 이 두 토픽은 삭제한다.
 - 절차: 별도 체크포인트·`startingOffsets=earliest`로 기동 → 1,000건 입력·커밋 확인 → Spark 중지 → 1,000건 추가 입력 → `kafka-delete-records.sh`로 log start offset을 마지막 커밋 offset + 500으로 옮긴다 → 같은 체크포인트로 재시작한다.
 - 판정: 재시작한 쿼리가 실패로 종료하고(종료 코드 0 아님), 오류가 데이터 소실(offset 범위 밖)을 가리킨다. 마지막 커밋 batch·offset과 정상 출력 행수가 재시작 전과 같다.
+- 결과 (2026-11-17): 통과. 1,000건 입력 후 batch 1 커밋(offset 1000, 정상 출력 838행)했고, 1,000건 추가 입력(끝 offset 2000) 뒤 log start offset을 1500으로 옮겨 같은 체크포인트로 재시작하니 종료 코드 1로 실패했다. 오류는 `KafkaIllegalStateException: Some data may have been lost because they are not available in Kafka any more; ... Could not read records in offset [1000, 2000) for topic partition test.offset-loss.raw.v1-0`(원인 `OffsetOutOfRangeException`)이다. 재시작 후 마지막 커밋은 batch 1·offset 1000, 정상 출력은 838행으로 같고 처리된 배치 로그는 없다(체크포인트 `offsets/2`에 계획만 기록되고 `commits/2`는 없음). 근거: [../measurements/2026-11-17-spark-offset-loss.json](../measurements/2026-11-17-spark-offset-loss.json)
 
 #### 2. 소비 지연·처리 지연 주입
 

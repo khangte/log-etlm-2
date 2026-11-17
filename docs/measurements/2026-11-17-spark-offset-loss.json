@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-17",
+  "scenario": "offset 소실 시 실패 (PRD 03, 3단계 마무리 검증 1)",
+  "verdict": "통과",
+  "topics": {
+    "raw": "test.offset-loss.raw.v1",
+    "dlq": "test.offset-loss.dlq.v1",
+    "partitions": 1,
+    "replication_factor": 1,
+    "config": {"message.timestamp.type": "LogAppendTime"}
+  },
+  "paths": {
+    "checkpoint": "/opt/spark/checkpoints/offset-loss",
+    "output": "/opt/spark/output/offset-loss"
+  },
+  "steps": {
+    "1_first_run": {
+      "container": "offloss-1",
+      "startingOffsets": "earliest",
+      "generator": {"seed": 7001, "events": 1000},
+      "log_end_offset": 1000,
+      "batch_1": {"input": 1000, "order": 838, "excluded": 114, "dlq": 48},
+      "committed_batch": 1,
+      "committed_offset": 1000,
+      "parquet_rows": 838,
+      "parquet_max_kafka_offset": 999
+    },
+    "2_stop": {"method": "docker stop", "exit_code": 143, "note": "SIGTERM 정지, 정상 중지 절차"},
+    "3_append": {"generator": {"seed": 7002, "events": 1000}, "log_end_offset": 2000, "log_start_offset": 0},
+    "4_delete_records": {"delete_to_offset": 1500, "rule": "마지막 커밋 offset 1000 + 500", "log_start_offset": 1500, "log_end_offset": 2000},
+    "5_restart": {
+      "container": "offloss-2",
+      "same_checkpoint": true,
+      "startingOffsets": "earliest",
+      "exit_code": 1,
+      "streaming_batch_logs": 0,
+      "failed_range": "[1000, 2000)",
+      "planned_batch_offsets_file": "offsets/2 = {\"test.offset-loss.raw.v1\":{\"0\":2000}} (계획만 기록, commits/2 없음)"
+    }
+  },
+  "before_after": {
+    "last_commit_batch": {"before": 1, "after": 1},
+    "last_commit_offset": {"before": 1000, "after": 1000},
+    "checkpoint_offsets_dir": {"before": [0, 1], "after": [0, 1, 2]},
+    "checkpoint_commits_dir": {"before": [0, 1], "after": [0, 1]},
+    "parquet_rows": {"before": 838, "after": 838}
+  },
+  "key_error": [
+    "org.apache.spark.sql.kafka010.KafkaIllegalStateException: Some data may have been lost because they are not available in Kafka any more;",
+    "Reason: Could not read records in offset [1000, 2000) for topic partition test.offset-loss.raw.v1-0",
+    "Caused by: org.apache.kafka.clients.consumer.OffsetOutOfRangeException: Fetch position FetchPosition{offset=1000, ...} is out of range for partition test.offset-loss.raw.v1-0",
+    "pyspark.errors.exceptions.captured.StreamingQueryException: [STREAM_FAILED] ... [FOREACH_BATCH_USER_FUNCTION_ERROR]"
+  ],
+  "cleanup": {
+    "topics_deleted": ["test.offset-loss.raw.v1", "test.offset-loss.dlq.v1"],
+    "containers_removed": ["offloss-1", "offloss-2"],
+    "checkpoint_kept": "/opt/spark/checkpoints/offset-loss",
+    "output_kept": "/opt/spark/output/offset-loss",
+    "shared_topics_touched": false
+  }
+}
