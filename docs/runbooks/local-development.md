@@ -78,7 +78,7 @@ docker compose ps -a
 docker compose logs kafka-init
 ```
 
-`kafka`가 healthy, `kafka-init`이 Exited (0)이면 토픽 초기화 완료다. `kafka-ui`는 `kafka` healthy 후 시작한다.
+`kafka`가 healthy, `kafka-init`이 Exited (0)이면 토픽 초기화 완료다. `kafka-ui`는 프로필 `tools`에 있어 기본 `up`에서는 실행하지 않는다.
 
 ### 토픽 확인
 
@@ -94,6 +94,13 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-s
 ```
 
 ### Kafka UI
+
+필요할 때만 실행하고, 확인 후 멈춘다.
+
+```bash
+docker compose --profile tools up -d kafka-ui
+docker compose --profile tools stop kafka-ui
+```
 
 `http://localhost:8080`(`KAFKA_UI_HOST_PORT`로 변경)에서 클러스터 `local`의 브로커 상태, 두 토픽의 파티션·설정, offset 범위, 메시지 표본을 확인한다. 이미지는 `ghcr.io/kafbat/kafka-ui:v1.5.0`으로 고정했다. 인증은 없고 루프백에만 게시한다. 성능 측정 중에는 UI 메시지 탐색을 하지 않고 UI 실행 여부를 기록한다.
 

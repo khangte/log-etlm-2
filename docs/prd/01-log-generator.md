@@ -236,6 +236,7 @@
 - 기존 `event_timestamp`는 이벤트 생성 시점이며 종단 간 지연의 기준이다. 생성·직렬화 시간은 별도 단조 증가 시계로 측정한다.
 - 이벤트별 측정값을 stdout 페이로드에 섞지 않고 상태 지표로 집계한다. flush 소요시간은 개별 쓰기와 분리한다.
 - Kafka 전송 측정은 [Kafka PRD](02-kafka-ingestion.md)에 따른다.
+- 4단계부터 Kafka 출력 모드의 생성·직렬화 시간과 Producer 지표를 1초 구간 통계로 ClickHouse `ops.producer_stats`에 기록한다. 방식과 실패 정책은 [ClickHouse 운영 지표 저장](04-clickhouse-storage.md#운영-지표-저장)을 따른다.
 
 ## 검증 및 완료 기준
 

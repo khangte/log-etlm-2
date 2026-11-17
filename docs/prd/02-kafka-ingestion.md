@@ -47,6 +47,10 @@
 - UI에서 브로커 연결 상태, 두 토픽의 파티션·보관 설정, 파티션별 offset 범위와 메시지 표본을 확인한다. DLQ 메시지 검증은 Spark의 기록 구현 이후 수행한다.
 - 클러스터 설정은 Compose 환경변수로 관리한다. 동적 설정 편집은 끄고 별도 영속 볼륨은 두지 않는다. 초기 로컬 환경에는 별도 로그인 인증을 구성하지 않는다.
 - 대량 메시지 조회는 브로커 부하에 영향을 줄 수 있으므로 성능 측정 중에는 UI 메시지 탐색을 중지하고 UI 실행 여부를 측정 결과에 기록한다.
+- `kafka-ui`는 Compose 프로필 `tools`에 둔다. 기본 `docker compose up`에서는 실행하지 않고 `docker compose --profile tools up -d kafka-ui`로 필요할 때만 띄운다.
+  - 선택 근거: 3단계 측정과 [ClickHouse 자원 예산](04-clickhouse-storage.md#자원-제한)은 Kafka UI를 끈 상태를 전제로 한다. 프로필로 분리하면 기본 실행이 곧 측정 구성이 되어, 매번 UI를 수동으로 멈추거나 실행 여부를 따로 확인할 필요가 없다. UI의 CPU 1개·메모리 1GiB 제한도 ClickHouse·Grafana 예산과 겹치지 않는다.
+  - 비교한 대안: 서비스를 유지하고 측정 때만 `docker compose stop kafka-ui`로 멈추면 설정 변경이 없지만, 다음 `up`에서 다시 시작돼 누락하기 쉽다. 서비스를 삭제하면 2단계 완료 기준의 확인 수단이 사라진다.
+  - 참고: [Compose profiles](https://docs.docker.com/compose/how-tos/profiles/)
 
 참고: [Kafbat UI 시작 안내](https://ui.docs.kafbat.io/overview/getting-started), [공식 Compose 구성 예시](https://github.com/kafbat/kafka-ui/blob/main/documentation/compose/kafbat-ui.yaml).
 
@@ -194,6 +198,7 @@ Kafka 데이터는 저장소 안에 파일로 생성하지 않고 Docker의 `kaf
 - ACK 시각은 이미 전송한 메시지에 넣지 않고 생성기 운영 지표로 집계한다. 전송 직전 UTC 시각이 추가로 필요하면 Kafka 헤더를 사용하며 원본 JSON은 재직렬화하지 않는다.
 - topic·partition·offset을 후속 처리까지 보존해 원문 파싱 실패도 추적할 수 있게 한다. JSON을 해석할 수 없는 로그는 생성 기준 지연을 계산할 수 없는 건수로 별도 집계한다.
 - 클라이언트 대기열 크기와 재시도·실패 건수를 함께 관찰한다. Kafka의 체류·소비 대기는 Spark 측정과 연결한다.
+- 4단계부터 위 지표를 실행 종료 시 출력과 별도로 1초 구간 통계로 집계해 ClickHouse `ops.producer_stats`에 기록한다. 구간별 분위수는 해당 구간 히스토그램에서 계산한다. 방식과 실패 정책은 [ClickHouse 운영 지표 저장](04-clickhouse-storage.md#운영-지표-저장)을 따른다.
 
 참고: [Kafka 토픽 timestamp 설정](https://kafka.apache.org/44/configuration/topic-configs/).
 
