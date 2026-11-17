@@ -195,6 +195,12 @@ Kafka 데이터는 저장소 안에 파일로 생성하지 않고 Docker의 `kaf
 
 참고: [Kafka 토픽 timestamp 설정](https://kafka.apache.org/44/configuration/topic-configs/).
 
+## Spark 연계 지속 부하의 후속 관측 (2026-11-17)
+
+[Spark 지속 부하 결과](03-stream-processing.md#지속-부하-측정-결과-2026-11-17)에서 120초 준비 + 600초 본 측정의 실제 ACK는 4,947.65 EPS였다. 전체 720초의 ACK 지연 p95는 12.6ms, delivery 최종 실패·재시도·클라이언트 오류는 각각 0이다. 이는 기존 완료 기준의 5초 준비 + 60초 단독 검증과 다른 구간이며 대체하지 않는다.
+
+입력 종료를 위해 SIGINT를 보냈을 때 생성기가 `output flush failed: 1 messages undelivered after flush`로 exit 1을 반환했다. 큐 등록 3,564,479·ACK 3,564,478·Kafka offset 증가 3,564,479로 종료 집계가 1건 어긋난다. 실제 유실이나 원인을 단정하지 않으며 SIGINT·delivery 콜백·ACK 카운터·flush 종료 경로를 별도 조사해야 한다. 이번 측정에서는 코드를 수정하지 않았다.
+
 ## 완료 기준
 
 아래 항목을 모두 충족하면 2단계를 완료로 처리한다. 성능 기준에 미달하면 원인과 실측치를 기록하고 완료로 처리하지 않는다. 실행 검증 결과는 로컬 runbook에 기록한다.
