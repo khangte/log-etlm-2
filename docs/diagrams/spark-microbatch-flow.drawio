@@ -1,0 +1,125 @@
+<mxfile host="app.diagrams.net">
+  <diagram id="spark-microbatch-flow" name="Spark 마이크로배치 1회 처리">
+    <mxGraphModel dx="1400" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1420" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="&lt;b&gt;Spark 마이크로배치 1회 처리 흐름&lt;/b&gt; — local[3] · 원본 파티션 3 · shuffle partitions 3 · persist() 사용" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="240" y="10" width="900" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- 외부 저장소 -->
+        <mxCell id="kafka" value="&lt;b&gt;Kafka 원본 토픽&lt;/b&gt;&lt;br&gt;raw.ecommerce.orders.v1&lt;br&gt;p0 · p1 · p2" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="40" y="290" width="160" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="cache" value="&lt;b&gt;블록 캐시&lt;/b&gt;&lt;br&gt;classified&lt;br&gt;(MEMORY_AND_DISK,&lt;br&gt;driver heap 2g)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=12;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="40" y="540" width="160" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="checkpoint" value="&lt;b&gt;checkpoint&lt;/b&gt;&lt;br&gt;offsets/ · commits/&lt;br&gt;SPARK_CHECKPOINT_DIR" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=12;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="80" width="160" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="parquet" value="&lt;b&gt;Parquet&lt;/b&gt;&lt;br&gt;SPARK_OUTPUT_DIR&lt;br&gt;part-*.snappy.parquet" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="490" width="160" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="dlq" value="&lt;b&gt;Kafka DLQ 토픽&lt;/b&gt;&lt;br&gt;dlq.ecommerce.orders.v1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=12;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="620" width="160" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- ① Driver: 배치 계획 -->
+        <mxCell id="plan" value="① Driver: 배치 계획 (SPARK_TRIGGER_INTERVAL=5 seconds, 데이터 없으면 생략)" style="swimlane;html=1;startSize=26;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="240" y="60" width="900" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="d1" value="파티션별 최신 offset 조회" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="plan">
+          <mxGeometry x="20" y="40" width="200" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d2" value="offset 범위 결정&lt;br&gt;maxOffsetsPerTrigger=50000&lt;br&gt;(토픽 합계, 밀린 양 비례 배분)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="plan">
+          <mxGeometry x="240" y="40" width="200" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d3" value="offsets/&amp;lt;batch_id&amp;gt; 기록&lt;br&gt;(WAL, 실행 전)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="plan">
+          <mxGeometry x="460" y="40" width="200" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d4" value="process_batch 호출&lt;br&gt;classify_batch(batch).persist()&lt;br&gt;(lazy: 아직 Kafka 미조회)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="plan">
+          <mxGeometry x="680" y="40" width="200" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="e_d1d2" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="plan" source="d1" target="d2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_d2d3" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="plan" source="d2" target="d3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_d3d4" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="plan" source="d3" target="d4"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ② Job 1: 집계 -->
+        <mxCell id="job1" value="② Job 1: 집계 — summarize_batch().collect() (첫 action: 여기서 Kafka를 실제로 읽음)" style="swimlane;html=1;startSize=26;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="240" y="250" width="900" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="s1a" value="&lt;b&gt;Stage 1-A&lt;/b&gt; (task 3개 = Kafka 파티션 3개 = local[3] 슬롯 3개)&lt;br&gt;1. 자기 파티션의 offset 범위 fetch&lt;br&gt;2. 추적 컬럼 추가 + LogAppendTime 검증 (아니면 raise_error)&lt;br&gt;3. classify_udf 실행 (Python worker)&lt;br&gt;4. 결과를 블록 캐시에 저장&lt;br&gt;5. rollup(outcome) 부분 집계 → 셔플 write" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;" vertex="1" parent="job1">
+          <mxGeometry x="20" y="40" width="520" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="s1b" value="&lt;b&gt;Stage 1-B&lt;/b&gt;&lt;br&gt;셔플 read → 최종 집계&lt;br&gt;(shuffle partitions=3, AQE 병합 가능)&lt;br&gt;collect() 최대 4행 → driver&lt;br&gt;counts: ORDER · EXCLUDED · DLQ" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="job1">
+          <mxGeometry x="620" y="40" width="260" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="e_s1" value="셔플" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeWidth=2;" edge="1" parent="job1" source="s1a" target="s1b"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ③ Job 2: 정상 주문 -->
+        <mxCell id="job2" value="③ Job 2: 정상 주문 (counts[ORDER] &amp;gt; 0 일 때만)" style="swimlane;html=1;startSize=26;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="240" y="490" width="620" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="s2a" value="&lt;b&gt;Stage 2-A&lt;/b&gt; (task 3개)&lt;br&gt;캐시 read (UDF 재실행 없음)&lt;br&gt;filter(ORDER)&lt;br&gt;from_json (FAILFAST)&lt;br&gt;컬럼 평탄화 35개&lt;br&gt;event_id 부분 중복 제거&lt;br&gt;→ hash(event_id) % 3 셔플 write" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="job2">
+          <mxGeometry x="20" y="40" width="250" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="s2b" value="&lt;b&gt;Stage 2-B&lt;/b&gt; (task 3개)&lt;br&gt;자기 버킷 셔플 read&lt;br&gt;최종 dropDuplicates(event_id)&lt;br&gt;(배치 내만, first() 선택)&lt;br&gt;task당 Parquet 1개 → _temporary/&lt;br&gt;driver job commit → _SUCCESS" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="job2">
+          <mxGeometry x="350" y="40" width="250" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="e_s2" value="셔플" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeWidth=2;" edge="1" parent="job2" source="s2a" target="s2b"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ④ Job 3: DLQ -->
+        <mxCell id="job3" value="④ Job 3: DLQ (counts[DLQ] &amp;gt; 0)" style="swimlane;html=1;startSize=26;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="900" y="490" width="240" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="s3a" value="&lt;b&gt;Stage 3-A&lt;/b&gt;&lt;br&gt;(task 3개, 셔플 없음)&lt;br&gt;캐시 read&lt;br&gt;filter(DLQ)&lt;br&gt;JSON 메시지 생성&lt;br&gt;Kafka producer&lt;br&gt;(acks=all)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="job3">
+          <mxGeometry x="20" y="40" width="200" height="170" as="geometry" />
+        </mxCell>
+
+        <!-- ⑤ Driver: 배치 마무리 -->
+        <mxCell id="finish" value="⑤ Driver: 배치 마무리 (배치가 5초를 넘기면 다음 배치 즉시 시작)" style="swimlane;html=1;startSize=26;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="240" y="760" width="900" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="f1" value="batch 로그&lt;br&gt;(input · order · excluded · dlq)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="finish">
+          <mxGeometry x="20" y="40" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="f2" value="unpersist()&lt;br&gt;latency 로그" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="finish">
+          <mxGeometry x="240" y="40" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="f3" value="process_batch 반환" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="finish">
+          <mxGeometry x="460" y="40" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="f4" value="commits/&amp;lt;batch_id&amp;gt; 기록&lt;br&gt;(배치 완료)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="finish">
+          <mxGeometry x="680" y="40" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="e_f12" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="finish" source="f1" target="f2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_f23" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="finish" source="f2" target="f3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_f34" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" parent="finish" source="f3" target="f4"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- 단계 순서 -->
+        <mxCell id="e_plan_job1" value="첫 action" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="plan" target="job1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_job1_job2" value="순차 실행" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="job1" target="job2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_job2_job3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="job2" target="job3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_job3_finish" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;" edge="1" parent="1" source="job3" target="finish"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- 데이터 이동 -->
+        <mxCell id="e_d1_kafka" value="최신 offset" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;" edge="1" parent="1" source="d1" target="kafka"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_d3_ckpt" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;" edge="1" parent="1" source="d3" target="checkpoint"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="800" y="230" /><mxPoint x="1300" y="230" /></Array></mxGeometry></mxCell>
+        <mxCell id="e_kafka_s1a" value="offset 범위 fetch&lt;br&gt;(배치당 1회)" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#6c8ebf;strokeWidth=2;" edge="1" parent="1" source="kafka" target="s1a"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_s1a_cache" value="캐시 채움" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#d6b656;strokeWidth=2;" edge="1" parent="1" source="s1a" target="cache"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="400" y="470" /><mxPoint x="120" y="470" /></Array></mxGeometry></mxCell>
+        <mxCell id="e_cache_s2a" value="캐시 read" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#d6b656;strokeWidth=2;" edge="1" parent="1" source="cache" target="s2a"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_cache_s3a" value="캐시 read" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#d6b656;strokeWidth=2;" edge="1" parent="1" source="cache" target="s3a"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="120" y="740" /><mxPoint x="1020" y="740" /></Array></mxGeometry></mxCell>
+        <mxCell id="e_s2b_parquet" value="append" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#82b366;strokeWidth=2;" edge="1" parent="1" source="s2b" target="parquet"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1180" y="560" /></Array></mxGeometry></mxCell>
+        <mxCell id="e_s3a_dlq" value="produce" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#b85450;strokeWidth=2;" edge="1" parent="1" source="s3a" target="dlq"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_f4_ckpt" style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;" edge="1" parent="1" source="f4" target="checkpoint"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1200" y="860" /><mxPoint x="1200" y="210" /><mxPoint x="1340" y="210" /></Array></mxGeometry></mxCell>
+
+        <!-- 주의 -->
+        <mxCell id="note" value="&lt;b&gt;재처리 주의 (at-least-once)&lt;/b&gt;: Parquet job commit 후 commits/ 기록 전에 장애가 나면 재시작 시 offsets/의 같은 범위를 다시 처리해 Parquet에 중복 append된다.&lt;br&gt;&lt;b&gt;실행 단위&lt;/b&gt;: local 모드라 driver·executor가 JVM 1개(driver heap 2g)를 공유하고, task 3개는 그 안의 스레드다. UDF는 별도 Python worker 프로세스에서 실행된다." style="shape=note;whiteSpace=wrap;html=1;size=14;align=left;spacingLeft=8;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="240" y="910" width="900" height="70" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
