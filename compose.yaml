@@ -51,6 +51,8 @@ services:
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0
+    # 파이프라인 운영·측정 중에는 띄우지 않는다. 필요할 때만 `--profile tools`로 실행한다.
+    profiles: [tools]
     depends_on:
       kafka:
         condition: service_healthy
