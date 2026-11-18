@@ -12,7 +12,7 @@
 4단계에서 대시보드가 읽을 저장 계약(`gold` 뷰 2개, `ops` 테이블 3개, `system.query_log`·`system.part_log`)과 읽기 계정 `grafana_reader`를 구현·검증했다([ClickHouse 구현 기록](04-clickhouse-storage.md#구현-기록)). 5단계는 이 계약 위에 Grafana 서비스, 데이터 소스, 대시보드 2개, 경보 규칙을 추가한다. 저장 계약을 바꿔야 하면 ClickHouse PRD를 먼저 갱신한다. 아래 요구사항은 아직 구현·검증하지 않았다.
 
 - 범위: Grafana 컨테이너, ClickHouse 데이터 소스, 주문 현황·파이프라인 운영 대시보드, [경보](#경보) 규칙. 모두 파일로 프로비저닝한다.
-- 제외: 외부 알림 발송(Slack·메일·Webhook), 사용자·팀 권한 관리, 롤업 테이블([조합 D](04-clickhouse-storage.md#중복-제거조회-조합-비교) 미도입 판단 유지), 생성 → 조회 가능 지연([조회 가능 지연 제외](04-clickhouse-storage.md#조회-가능-지연-제외)).
+- 제외: 외부 알림 발송(Slack·메일·Webhook), 사용자·팀 권한 관리, 롤업 테이블([조합 D](04-clickhouse-storage.md#중복-제거조회-조합-비교) 미도입 판단 유지), 생성 → 조회 가능 지연([조회 가능 지연 제외](04-clickhouse-storage.md#조회-가능-지연-제외)), 브라우저 계측([화면 반영 지연 계측 제외](#화면-반영-지연-계측-제외)).
 
 ## 실행 구성
 
@@ -63,9 +63,13 @@ infra/grafana/
 | 항목 | 값 | 근거 |
 | --- | --- | --- |
 | 이름·UID | `ClickHouse` / `clickhouse` | 대시보드 JSON이 UID로 참조한다. 고정하지 않으면 재생성 시 패널이 끊긴다 |
-| 프로토콜·주소 | HTTP, `clickhouse:8123` | 생성기·Spark 지표가 이미 쓰는 인터페이스다. native 포트를 열 필요가 없다 |
-| 계정 | `grafana_reader`, 비밀번호는 `secureJsonData`에 환경변수 `$CLICKHOUSE_GRAFANA_PASSWORD`로 주입 | [계정과 권한](04-clickhouse-storage.md#계정과-권한). 파일에 비밀번호를 두지 않는다 |
+| 프로토콜·주소 | `jsonData`: `protocol: http`, `host: clickhouse`, `port: 8123` | 생성기·Spark 지표가 이미 쓰는 인터페이스다. native 포트를 열 필요가 없다 |
+| 계정 | `jsonData.username: grafana_reader`, `secureJsonData.password: $CLICKHOUSE_GRAFANA_PASSWORD` | [계정과 권한](04-clickhouse-storage.md#계정과-권한). 파일에 비밀번호를 두지 않는다 |
+| 기본 데이터베이스 | `jsonData.defaultDatabase: gold` | 쿼리는 데이터베이스 이름을 명시하므로 쿼리 빌더 기본값으로만 쓴다 |
 | 편집 | `editable: false` | 프로비저닝 파일이 원본이다 |
+
+- 필드명은 플러그인 4.23.5 소스의 설정 타입(`CHConfig`, `Protocol.Http = 'http'`)에서 확인했다.
+- 환경변수는 `${…}`가 아닌 `$CLICKHOUSE_GRAFANA_PASSWORD` 형식으로 쓴다. [Grafana 프로비저닝 문서](https://grafana.com/docs/grafana/latest/administration/provisioning/#use-environment-variables)는 `${…}` 형식이 값 안의 `$`를 한 번 더 치환한다고 안내한다. Grafana 컨테이너 환경변수에 `CLICKHOUSE_GRAFANA_PASSWORD`를 넘긴다.
 
 - 조회·경보 쿼리는 모두 이 데이터 소스 하나를 쓴다. 데이터베이스 이름을 쿼리에 명시한다(`gold.`·`ops.`·`system.`).
 
@@ -109,7 +113,7 @@ infra/grafana/
 | Spark 배치 | `StreamingQueryProgress.durationMs.triggerExecution` | 트리거 전체 소요시간. 출력·체크포인트 등 포함 범위를 명시하며 순수 정제 시간으로 표시하지 않음 |
 | Spark → ClickHouse | 정상 DataFrame의 JDBC write action 호출 직전 → 반환 또는 실패 | 선행 변환·스케줄링·태스크 재시도 등이 포함될 수 있는 출력 action 소요시간 |
 | ClickHouse INSERT | `system.query_log`의 INSERT 쿼리별 `query_duration_ms` | 서버 측 요청별 처리시간. 네트워크·클라이언트 대기는 포함하지 않으며 Spark 측 JDBC write action 시간과 별도 패널로 표시 |
-| Grafana 조회·화면 | 조회 요청 → 응답 수신, 이벤트 생성 → 화면 반영 | 조회 응답시간과 화면 반영 지연을 별도 표시. 화면 반영은 브라우저 계측 필요 |
+| Grafana 조회 | `system.query_log`의 `grafana_reader` 쿼리별 `query_duration_ms` | 서버 측 조회 처리시간. 네트워크·렌더링은 포함하지 않음. 화면 반영 지연은 v1에서 측정하지 않음([화면 반영 지연 계측 제외](#화면-반영-지연-계측-제외)) |
 
 - 지연과 함께 Producer ACK EPS·전송 실패·큐 길이, Spark 입력·처리 EPS·정상/제외/DLQ 건수, Kafka 파티션별 backlog, ClickHouse 쓰기 실패·재시도, 데이터 최신성을 표시한다.
 - Kafka backlog는 보관 중인 끝 offset과 Spark 체크포인트의 처리 완료 offset 경계를 기준으로 정의한다. consumer group lag와 동일하다고 가정하지 않는다. offset 차이는 레코드 건수의 근사 지표로 표시하고 실제 입력 건수와 구분한다. 수집 경로는 아래 패널별 데이터 원천의 progress 지표를 따른다.
@@ -165,6 +169,7 @@ Grafana 통합 경보(unified alerting)로 아래 규칙을 파일 프로비저�
 | ID 충돌(1시간) | 최근 1시간 같은 `event_id`에 서로 다른 `event_timestamp`가 있는 건수 > 0 | 1분 / 대기 없음 | [충돌 감지 정책](04-clickhouse-storage.md#이벤트-식별과-테이블-기준)의 1시간 점검 |
 | ID 충돌(전체 보관 구간) | 보관 구간(24시간) 전체에서 같은 조건 건수 > 0 | 1시간 / 대기 없음 | 두 시각이 1시간 이상 떨어진 충돌은 1시간 점검이 놓친다 |
 
+- 임계값과 평가 주기는 실측 없이 정한 초기값이다. 5단계 지속 부하 동안 정상 상태에서 경보가 뜨지 않는지(오탐 0건)와 장애 주입 때 뜨는지를 함께 확인하고, 오탐이 나면 임계값을 조정해 이 표를 갱신한다.
 - 진행 공백 30초는 트리거 주기 5초의 6배, Driver 감시 시간 90초의 1/3이다. 감시가 재시작하기 전에 경보가 먼저 뜬다. `ops` 지표 쓰기 실패로도 공백이 생길 수 있으므로 경보 설명에 Spark 로그 확인을 적는다.
 - 충돌 점검은 `silver`를 읽지 않고 `FINAL` 없는 `gold.order_event_latency`(`event_id`·`event_timestamp` 포함)로 계산한다. 같은 `event_timestamp`의 재처리 중복은 `uniqExact(event_timestamp) > 1` 조건에 걸리지 않는다.
 
@@ -191,11 +196,18 @@ Grafana 통합 경보(unified alerting)로 아래 규칙을 파일 프로비저�
 | --- | --- | --- |
 | 단계별 처리시간 | 생성기·Kafka 전송·Spark 배치·ClickHouse INSERT 지표 | 평균·p50·p95·p99와 측정 건수·실패 건수 표시 |
 | 데이터 최신성 | 조회 기준 현재 UTC 시각 − 조회 범위 내 최신 `event_timestamp` | 최신 데이터가 얼마나 오래됐는지 나타내며 개별 이벤트 처리지연과 다름 |
-| 조회 응답시간 | 실제 대시보드 조회 요청 시작 → 응답 수신 | 조회·네트워크 지연. 서버 측은 `query_log`의 `grafana_reader` 행, 클라이언트 측은 브라우저 계측으로 경계를 구분 |
-| 화면 반영 지연 | 이벤트 생성 → 해당 이벤트 또는 이를 포함한 집계의 화면 반영 | 자동 갱신 대기·조회·렌더링을 포함하며 별도 브라우저 계측으로 검증 |
+| 조회 서버 시간 | `query_log`의 `grafana_reader` 행 `query_duration_ms` | 서버 측 처리시간. 네트워크·Grafana 백엔드·렌더링은 포함하지 않음 |
 
 - 대시보드 자동 갱신 주기, 조회 시간 범위, 집계 간격, 캐시 설정을 측정 결과에 함께 기록한다. 데이터가 없는 경우 최신성을 0으로 표시하지 않고 데이터 없음으로 구분한다.
-- 화면 반영 지연은 샘플 이벤트를 포함한 검증 패널과 브라우저 계측으로 확인한다. 서버 쿼리 완료나 응답 수신을 화면 반영 완료로 간주하지 않는다. 실제 화면 반영을 계측하지 않으면 해당 수치를 측정값으로 표시하지 않는다.
+- 서버 쿼리 완료나 응답 수신을 화면 반영 완료로 간주하지 않는다. 화면 반영 지연은 측정값으로 표시하지 않는다.
+
+### 화면 반영 지연 계측 제외
+
+이벤트 생성 → 화면 반영 지연의 브라우저 계측(샘플 이벤트 검증 패널, Playwright 등 브라우저 자동화)은 v1 범위에서 제외한다.
+
+- 선택 근거: v1 운영 지표의 우선 목적은 병목 구간 판별이며, 화면 반영 지연은 어느 구간이 원인인지 알려주지 않는다. 4단계 [조회 가능 지연 제외](04-clickhouse-storage.md#조회-가능-지연-제외)와 같은 판단이다. 화면 반영 최악값은 자동 갱신 대기가 가장 큰 항(주문 60초, 운영 5초)이고 나머지 항(트리거·배치·조회 서버 시간)은 이미 측정한다. 브라우저 자동화는 새 의존성과 실행 환경을 추가한다.
+- 비교한 대안: 포함하면 화면 반영 지연을 실측할 수 있지만 위 비용이 든다. 서버 측 조회 시간 + 갱신 주기를 화면 반영 지연으로 표시하면 렌더링·Grafana 백엔드 시간이 빠져 측정값이 아니다.
+- 제약: 대시보드는 화면 반영 지연을 표시하지 않는다. 필요해지면 이 절을 갱신하고 계측을 추가한다.
 - Grafana 표시 지연과 데이터 최신성을 분리한다. 집계 패널은 집계 윈도우 대기까지 포함할 수 있으므로 해당 조건을 명시한다.
 - Kafka backlog는 offset 기반 건수와 시간 기반 지연을 구분해 표시한다. Spark 배치 시간, 실제 EPS, 적재 실패·재시도와 함께 보며 병목을 판단한다.
 - 서비스 간 시계 오차·측정 불가·미발견 이벤트를 누락시키지 않고 별도 지표로 표시한다. 구간별 백분위수의 단순 평균이나 겹치는 단계 지연의 합계를 종단 간 지연으로 표시하지 않는다.
@@ -216,7 +228,7 @@ Grafana 통합 경보(unified alerting)로 아래 규칙을 파일 프로비저�
 기능 확인 항목은 아래와 같다.
 
 - 빈 볼륨에서 `docker compose up`만으로 데이터 소스·대시보드 2개·경보 규칙이 생성되고 데이터 소스 상태 확인이 통과한다. `grafana_reader`로 `silver` 조회·쓰기 쿼리가 거부된다.
-- 최신성·화면 반영 지연의 구분, 갱신 주기와 조회 조건 표시, 데이터 없음·측정 불가 표시를 확인한다. 갱신 주기를 바꿔 화면 대기 영향과 데이터 처리 지연이 구분되는지 검증한다.
+- 갱신 주기와 조회 조건 표시, 데이터 없음·측정 불가 표시를 확인한다. 생성기를 멈췄을 때 최신성이 커지다가 범위를 벗어나면 데이터 없음으로 바뀌는지 확인한다.
 - 주문 표본의 기대 집계와 화면 수치를 대조하고 중복 재처리 시 주문 수·매출이 부풀지 않는지 확인한다.
 - 단계별 지연·장애를 주입해 해당 패널과 실패·재시도·backlog 변화를 검증한다. Spark 측 JDBC write action 시간과 `system.query_log`의 서버 측 INSERT 처리시간의 측정 경계를 구분해 표시하는지 확인한다.
 - 경보: Python worker SIGSTOP으로 진행 공백 경보가 Driver 감시 종료(약 90초)보다 먼저 뜨는지, 재시작 후 재시작 경보가 뜨는지, 권한 회수로 INSERT 실패·배치 실패 경보가 뜨는지, 충돌 행 주입으로 1시간·전체 충돌 경보가 뜨는지 확인한다. 생성기를 멈춘 상태에서는 진행 공백 경보가 뜨지 않아야 한다. 주입한 시험 행은 확인 후 삭제한다.
