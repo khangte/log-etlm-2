@@ -1,4 +1,4 @@
-# 공식 Spark 이미지(Spark 4.2.1, Scala 2.13, Java 17, Python 3.10)에 Kafka 커넥터와 검증·테스트 패키지를 더한다.
+# 공식 Spark 이미지(Spark 4.2.1, Scala 2.13, Java 17, Python 3.10)에 Kafka 커넥터·ClickHouse JDBC Driver와 검증·테스트 패키지를 더한다.
 # 앱 코드·계약·풀은 Compose가 읽기 전용으로 마운트하므로 이미지에 복사하지 않는다.
 FROM apache/spark:4.2.1-scala2.13-java17-python3-ubuntu
 
@@ -14,6 +14,9 @@ ADD --chmod=644 \
     ${MAVEN}/org/apache/commons/commons-pool2/2.13.1/commons-pool2-2.13.1.jar \
     /opt/spark/jars/
 
+# ClickHouse 공식 JDBC Driver. all classifier는 의존성을 포함한 단일 jar다(ClickHouse PRD '버전').
+ADD --chmod=644 ${MAVEN}/com/clickhouse/clickhouse-jdbc/0.11.2/clickhouse-jdbc-0.11.2-all.jar /opt/spark/jars/
+
 # rfc3339-validator가 없으면 jsonschema가 format: date-time을 검사하지 않는다.
 # 버전은 pyproject.toml과 같게 유지한다.
 RUN pip3 install --no-cache-dir jsonschema==4.26.0 jsonschema-rs==0.61.2 rfc3339-validator==0.1.4 pytest==9.2.0
@@ -23,6 +26,6 @@ RUN pip3 install --no-cache-dir jsonschema==4.26.0 jsonschema-rs==0.61.2 rfc3339
 RUN mkdir -p /opt/spark/conf && echo "spark.sql.chunkBase64String.enabled false" > /opt/spark/conf/spark-defaults.conf
 
 # named volume은 처음 마운트될 때 이미지 디렉터리의 소유자를 따른다. spark 사용자가 쓸 수 있게 미리 만든다.
-RUN mkdir -p /opt/spark/checkpoints /opt/spark/output && chown spark:spark /opt/spark/checkpoints /opt/spark/output
+RUN mkdir -p /opt/spark/checkpoints && chown spark:spark /opt/spark/checkpoints
 
 USER spark

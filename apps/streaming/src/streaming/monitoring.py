@@ -8,6 +8,9 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.streaming import StreamingQueryListener
 
+from streaming.config import Config
+from streaming.ops_metrics import QUERY_PROGRESS_TABLE, insert_rows, progress_row
+
 log = logging.getLogger("streaming")
 
 def summarize_batch(classified: DataFrame, callback_started_at: datetime,
@@ -52,10 +55,11 @@ def summarize_batch(classified: DataFrame, callback_started_at: datetime,
 class ProgressLogger(StreamingQueryListener):
     """쿼리 시작·진행·종료 정보를 한 줄 JSON으로 로그에 남긴다."""
 
-    def __init__(self, query_context: dict | None = None):
-        """단일 쿼리의 동기 시작 이벤트에서 콜백에 공유할 실행 식별자를 설정한다."""
+    def __init__(self, query_context: dict | None = None, config: Config | None = None):
+        """단일 쿼리의 동기 시작 이벤트에서 콜백에 공유할 실행 식별자를 설정한다. config가 있으면 진행 정보를 ClickHouse에도 기록한다."""
         super().__init__()
         self.query_context = query_context if query_context is not None else {}
+        self.config = config
 
     def onQueryStarted(self, event):
         """쿼리 id·runId를 남긴다. 재시작 시 runId로 실행을 구분한다."""
@@ -65,6 +69,13 @@ class ProgressLogger(StreamingQueryListener):
     def onQueryProgress(self, event):
         """배치 ID·입력 건수·파티션별 offset 범위·처리속도·durationMs를 담은 진행 정보를 남긴다."""
         log.info("progress %s", event.progress.json)
+        if self.config is not None:
+            try:
+                row = progress_row(json.loads(event.progress.json))
+            except Exception as error:  # 지표 변환 실패도 쿼리를 멈추지 않는다.
+                log.warning("ops metrics progress conversion failed error=%s", error)
+                return
+            insert_rows(self.config, QUERY_PROGRESS_TABLE, [row])
 
     def onQueryIdle(self, event):
         """새 데이터가 없는 트리거는 기록하지 않는다."""

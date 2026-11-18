@@ -7,7 +7,7 @@ SPARK_MASTER·SPARK_DRIVER_MEMORY는 JVM 기동 전에 필요하므로 Compose�
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 STARTING_OFFSETS = ("earliest", "latest")
 BOOLEANS = {"true": True, "false": False}
@@ -29,8 +29,12 @@ class Config:
     trigger_interval: str  # Spark processingTime 문자열. 예: "5 seconds"
     shuffle_partitions: int
     checkpoint_dir: str
-    output_dir: str  # 3단계 정상 주문 Parquet 경로. 4단계 JDBC 전환 시 제거한다.
     latency_metrics_enabled: bool  # false면 지연 분위수 집계를 생략한다(계측 오버헤드 대조군).
+    clickhouse_jdbc_url: str  # 정상 주문 JDBC 적재 주소. 동기 INSERT 서버 설정을 포함한다.
+    clickhouse_http_url: str  # 운영 지표 HTTP INSERT 주소
+    clickhouse_password: str = field(repr=False)  # spark_writer 계정 비밀번호. 로그·repr에 남기지 않는다.
+    jdbc_batch_size: int  # 쓰기 파티션당 INSERT 1회가 되도록 maxOffsetsPerTrigger와 같게 둔다.
+    jdbc_num_partitions: int  # ClickHouse 동시 JDBC 연결 수
 
 
 def _value(environ: Mapping[str, str], key: str) -> str:
@@ -76,6 +80,10 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         trigger_interval=_value(env, "SPARK_TRIGGER_INTERVAL"),
         shuffle_partitions=_positive_int(env, "SPARK_SHUFFLE_PARTITIONS"),
         checkpoint_dir=_value(env, "SPARK_CHECKPOINT_DIR"),
-        output_dir=_value(env, "SPARK_OUTPUT_DIR"),
         latency_metrics_enabled=_bool(env, "SPARK_LATENCY_METRICS_ENABLED"),
+        clickhouse_jdbc_url=_value(env, "SPARK_CLICKHOUSE_JDBC_URL"),
+        clickhouse_http_url=_value(env, "SPARK_CLICKHOUSE_HTTP_URL").rstrip("/"),
+        clickhouse_password=_value(env, "CLICKHOUSE_SPARK_PASSWORD"),
+        jdbc_batch_size=_positive_int(env, "SPARK_JDBC_BATCH_SIZE"),
+        jdbc_num_partitions=_positive_int(env, "SPARK_JDBC_NUM_PARTITIONS"),
     )

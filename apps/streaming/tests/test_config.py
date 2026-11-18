@@ -13,8 +13,12 @@ VALID = {
     "SPARK_TRIGGER_INTERVAL": "5 seconds",
     "SPARK_SHUFFLE_PARTITIONS": "3",
     "SPARK_CHECKPOINT_DIR": "/opt/spark/checkpoints/orders",
-    "SPARK_OUTPUT_DIR": "/opt/spark/output/orders",
     "SPARK_LATENCY_METRICS_ENABLED": "true",
+    "SPARK_CLICKHOUSE_JDBC_URL": "jdbc:clickhouse:http://clickhouse:8123?clickhouse_setting_async_insert=0",
+    "SPARK_CLICKHOUSE_HTTP_URL": "http://clickhouse:8123/",
+    "CLICKHOUSE_SPARK_PASSWORD": "secret-value",
+    "SPARK_JDBC_BATCH_SIZE": "50000",
+    "SPARK_JDBC_NUM_PARTITIONS": "3",
 }
 
 
@@ -25,8 +29,10 @@ def test_유효한_설정을_읽는다():
     assert (c.bootstrap_servers, c.topic, c.dlq_topic) == ("kafka:19092", "raw.ecommerce.orders.v1",
                                                             "dlq.ecommerce.orders.v1")
     assert (c.max_offsets_per_trigger, c.shuffle_partitions, c.trigger_interval) == (50000, 3, "5 seconds")
-    assert (c.checkpoint_dir, c.output_dir, c.starting_offsets) == (
-        "/opt/spark/checkpoints/orders", "/opt/spark/output/orders", "earliest")
+    assert (c.checkpoint_dir, c.starting_offsets) == ("/opt/spark/checkpoints/orders", "earliest")
+    assert (c.jdbc_batch_size, c.jdbc_num_partitions) == (50000, 3)
+    assert c.clickhouse_http_url == "http://clickhouse:8123"  # 끝 슬래시 제거
+    assert "secret-value" not in repr(c)  # 비밀번호는 repr에 남기지 않는다.
 
 
 def test_latest_허용():
@@ -51,7 +57,8 @@ def test_빈값_거부(key, blank):
         load_config({**VALID, key: blank})
 
 
-@pytest.mark.parametrize("key", ["SPARK_MAX_OFFSETS_PER_TRIGGER", "SPARK_SHUFFLE_PARTITIONS"])
+@pytest.mark.parametrize("key", ["SPARK_MAX_OFFSETS_PER_TRIGGER", "SPARK_SHUFFLE_PARTITIONS",
+                                 "SPARK_JDBC_BATCH_SIZE", "SPARK_JDBC_NUM_PARTITIONS"])
 @pytest.mark.parametrize("bad", ["abc", "1.5", "0", "-1", "5 seconds"])
 def test_정수_형식_오류(key, bad):
     """양의 정수가 아니면 ConfigError."""

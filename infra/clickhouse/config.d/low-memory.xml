@@ -1,0 +1,10 @@
+<!-- 메모리 16GB 미만 환경 설정. 근거: docs/prd/04-clickhouse-storage.md '자원 제한', https://clickhouse.com/docs/operations/tips -->
+<!-- 대시보드가 쓰는 query_log·part_log는 유지하고 나머지 내부 로그 테이블을 끈다. -->
+<clickhouse>
+    <metric_log remove="1"/>
+    <trace_log remove="1"/>
+    <text_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <!-- mark cache 512MiB -->
+    <mark_cache_size>536870912</mark_cache_size>
+</clickhouse>

@@ -235,7 +235,10 @@ Spark는 단일 컨테이너의 local 모드로 실행한다. 아래 값은 PRD 
 | `SPARK_JDBC_BATCH_SIZE` (4단계 추가) | `50000` | `maxOffsetsPerTrigger`와 같게 두어 파티션 편중과 무관하게 쓰기 파티션당 INSERT 1회로 만든다. |
 | `SPARK_JDBC_NUM_PARTITIONS` (4단계 추가) | `3` | ClickHouse 동시 연결 3개. 배치당 part 3개, 약 0.6 part/s다. |
 | `SPARK_CHECKPOINT_DIR` | `/opt/spark/checkpoints/orders` | 볼륨에 마운트한다. Git에서 제외한다. |
-| `SPARK_OUTPUT_DIR` | `/opt/spark/output/orders` | 3단계 정상 주문 검증용 Parquet 경로. 체크포인트와 다른 볼륨이다. 4단계에서 JDBC writer로 교체하며 제거한다. |
+| `SPARK_OUTPUT_DIR` (4단계 제거) | - | 3단계 정상 주문 검증용 Parquet 경로였다. 4단계 JDBC writer 교체와 함께 제거했다. |
+| `SPARK_CLICKHOUSE_JDBC_URL` (4단계 추가) | `jdbc:clickhouse:http://clickhouse:8123?clickhouse_setting_async_insert=0` | 동기 INSERT를 서버 설정으로 명시한다. 근거는 [JDBC 쓰기 설정](04-clickhouse-storage.md#jdbc-쓰기-설정). |
+| `SPARK_CLICKHOUSE_HTTP_URL` (4단계 추가) | `http://clickhouse:8123` | 운영 지표 HTTP INSERT 주소. |
+| `CLICKHOUSE_SPARK_PASSWORD` (4단계 추가) | `.env`에만 설정 | `spark_writer` 계정 비밀번호. 계정 이름은 코드·`init.sh`에 고정한다. |
 | `SPARK_STARTING_OFFSETS` | `earliest` | [Kafka PRD](02-kafka-ingestion.md)의 최초 실행 기준. 재시작은 체크포인트 위치가 우선한다. |
 | `SPARK_KAFKA_BOOTSTRAP_SERVERS` | `kafka:19092` | Compose 내부 주소. |
 | `SPARK_LATENCY_METRICS_ENABLED` | `true` | `false`면 지연 분위수 집계를 생략하고 건수만 집계한다. [계측 오버헤드 대조군](#3-계측-오버헤드-대조군) 전용이다. 값은 `true`·`false`만 허용하며, 기존 로컬 `.env`와 호환되도록 Compose가 기본값 `true`를 넣는다. |
@@ -332,7 +335,8 @@ Kafka timestamp 종류가 LogAppendTime(`timestampType=1`)이 아니면 이벤�
 
 - ClickHouse는 4단계이므로 3단계는 정상 주문(31개 이벤트 컬럼 + Kafka 추적 4개, 배치 내 `dropDuplicates(["event_id"])` 적용 후)을 `SPARK_OUTPUT_DIR`의 Parquet에 append한다. 경로는 체크포인트(`spark-checkpoints`)와 다른 named volume `spark-output`이며 Git 밖에 있다.
 - 쓰기 보장은 최소 한 번이다. 배치 재시도 시 같은 `event_id` 행이 중복될 수 있으므로 검증은 `event_id` 고유 건수로 한다.
-- 4단계 경계: `streaming.sinks.write_orders` 한 함수만 Spark JDBC writer로 교체하고 `SPARK_OUTPUT_DIR`·`spark-output` 볼륨을 제거한다. 분류·평탄화·DLQ·계측 코드는 바꾸지 않는다.
+- 4단계 경계: `streaming.sinks.write_orders` 한 함수만 Spark JDBC writer로 교체하고 `SPARK_OUTPUT_DIR`·`spark-output` 볼륨을 제거한다. 분류·평탄화·DLQ·계측 로직은 바꾸지 않는다.
+  - 4단계 구현(2026-11-17): 위 경계대로 교체했다. 추가로 [ClickHouse 컬럼 타입](04-clickhouse-storage.md#order_events-컬럼-타입)에 따라 정상 주문에 `spark_query_id`·`spark_run_id`·`spark_batch_id`·`spark_processed_at`(콜백 진입 시각)을 붙이고, 콜백 계측 dict와 진행 정보를 `ops.spark_batch_attempts`·`ops.spark_query_progress`에 HTTP INSERT한다(`streaming.ops_metrics`). 기존 로그 출력은 유지한다.
 
 ### 진행 정보와 건수 계측
 

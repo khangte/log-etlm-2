@@ -67,6 +67,51 @@ services:
     cpus: 1
     mem_limit: 1g
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8.38.9
+    # HTTP 인터페이스는 호스트 생성기의 지표 INSERT와 수동 점검용이다. 루프백에만 게시한다.
+    ports:
+      - "127.0.0.1:${CLICKHOUSE_HTTP_HOST_PORT:?CLICKHOUSE_HTTP_HOST_PORT is required}:8123"
+    environment:
+      # 관리자 계정. 이 설정을 쓰면 이미지가 인증 없는 default 사용자를 만들지 않는다.
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:?CLICKHOUSE_USER is required}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./infra/clickhouse/config.d/low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
+    cpus: 2
+    mem_limit: 4g
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: [CMD-SHELL, 'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --query "SELECT 1"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  clickhouse-init:
+    image: clickhouse/clickhouse-server:26.8.38.9
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:?CLICKHOUSE_USER is required}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}
+      CLICKHOUSE_SPARK_PASSWORD: ${CLICKHOUSE_SPARK_PASSWORD:?CLICKHOUSE_SPARK_PASSWORD is required}
+      CLICKHOUSE_GENERATOR_PASSWORD: ${CLICKHOUSE_GENERATOR_PASSWORD:?CLICKHOUSE_GENERATOR_PASSWORD is required}
+      CLICKHOUSE_GRAFANA_PASSWORD: ${CLICKHOUSE_GRAFANA_PASSWORD:?CLICKHOUSE_GRAFANA_PASSWORD is required}
+    # 계정·스키마·권한 적용은 스크립트 한 곳에서 관리한다. 모든 문이 반복 실행에 안전하다.
+    entrypoint: [/bin/bash, /scripts/init.sh]
+    volumes:
+      - ./infra/clickhouse/init.sh:/scripts/init.sh:ro
+      - ./infra/clickhouse/schema.sql:/scripts/schema.sql:ro
+    mem_limit: 512m
+    restart: 'no'
+
   spark:
     build: ./apps/streaming
     # 실행 중인 애플리케이션의 내장 Spark UI를 로컬에서 확인한다.
@@ -74,6 +119,8 @@ services:
       - "127.0.0.1:4040:4040"
     depends_on:
       kafka-init:
+        condition: service_completed_successfully
+      clickhouse-init:
         condition: service_completed_successfully
     environment:
       SPARK_KAFKA_BOOTSTRAP_SERVERS: ${SPARK_KAFKA_BOOTSTRAP_SERVERS:?SPARK_KAFKA_BOOTSTRAP_SERVERS is required}
@@ -84,7 +131,11 @@ services:
       SPARK_TRIGGER_INTERVAL: ${SPARK_TRIGGER_INTERVAL:?SPARK_TRIGGER_INTERVAL is required}
       SPARK_SHUFFLE_PARTITIONS: ${SPARK_SHUFFLE_PARTITIONS:?SPARK_SHUFFLE_PARTITIONS is required}
       SPARK_CHECKPOINT_DIR: ${SPARK_CHECKPOINT_DIR:?SPARK_CHECKPOINT_DIR is required}
-      SPARK_OUTPUT_DIR: ${SPARK_OUTPUT_DIR:?SPARK_OUTPUT_DIR is required}
+      SPARK_JDBC_BATCH_SIZE: ${SPARK_JDBC_BATCH_SIZE:?SPARK_JDBC_BATCH_SIZE is required}
+      SPARK_JDBC_NUM_PARTITIONS: ${SPARK_JDBC_NUM_PARTITIONS:?SPARK_JDBC_NUM_PARTITIONS is required}
+      SPARK_CLICKHOUSE_JDBC_URL: ${SPARK_CLICKHOUSE_JDBC_URL:?SPARK_CLICKHOUSE_JDBC_URL is required}
+      SPARK_CLICKHOUSE_HTTP_URL: ${SPARK_CLICKHOUSE_HTTP_URL:?SPARK_CLICKHOUSE_HTTP_URL is required}
+      CLICKHOUSE_SPARK_PASSWORD: ${CLICKHOUSE_SPARK_PASSWORD:?CLICKHOUSE_SPARK_PASSWORD is required}
       # 기존 로컬 .env에 없어도 기동되도록 Compose 기본값 true를 둔다. 계측 오버헤드 대조군에서만 false로 바꾼다.
       SPARK_LATENCY_METRICS_ENABLED: ${SPARK_LATENCY_METRICS_ENABLED:-true}
       # 앱·생성기 풀(의미 검증 기준)·PySpark를 import 경로에 둔다. pytest도 같은 경로를 쓴다.
@@ -105,12 +156,10 @@ services:
       - ./apps/log_generator/src:/opt/app/apps/log_generator/src:ro
       - ./contracts:/opt/app/contracts:ro
       - spark-checkpoints:/opt/spark/checkpoints
-      - spark-output:/opt/spark/output
     cpus: 3
     mem_limit: 3g
 
 volumes:
   kafka-data:
-  # 체크포인트와 3단계 정상 출력(Parquet)은 서로 다른 볼륨에 둔다. 출력 볼륨은 4단계 JDBC 전환 시 제거한다.
   spark-checkpoints:
-  spark-output:
+  clickhouse-data:

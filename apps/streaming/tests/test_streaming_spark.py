@@ -259,33 +259,63 @@ class TestDlqRecords:
 class TestProcessBatch:
     """process_batch: 쓰기 함수는 대체하고 건수·실패 전파를 확인한다."""
 
+    @pytest.fixture(autouse=True)
+    def ops_rows(self, monkeypatch):
+        """운영 지표 INSERT를 대체하고 기록된 행을 모은다."""
+        rows = []
+        monkeypatch.setattr(batch, "insert_rows", lambda cfg, table, new: rows.append((table, new)))
+        return rows
+
+    @pytest.fixture
+    def orders_out(self, monkeypatch):
+        """정상 주문 JDBC 쓰기를 대체하고 쓰려던 행·컬럼을 모은다."""
+        out = {}
+        def capture(orders, cfg):
+            """DataFrame을 소비해 행과 컬럼 이름을 남긴다."""
+            out["columns"], out["rows"] = orders.columns, orders.collect()
+        monkeypatch.setattr(batch, "write_orders", capture)
+        return out
+
     @pytest.fixture
     def config(self, tmp_path):
-        """임시 출력 경로를 쓰는 설정."""
+        """ClickHouse 접속 없이 콜백만 실행하는 설정."""
         return load_config({
             "SPARK_KAFKA_BOOTSTRAP_SERVERS": "kafka:19092", "KAFKA_TOPIC": TOPIC,
             "KAFKA_DLQ_TOPIC": "dlq.ecommerce.orders.v1", "SPARK_STARTING_OFFSETS": "earliest",
             "SPARK_MAX_OFFSETS_PER_TRIGGER": "100", "SPARK_TRIGGER_INTERVAL": "1 seconds",
             "SPARK_SHUFFLE_PARTITIONS": "3", "SPARK_CHECKPOINT_DIR": str(tmp_path / "ckpt"),
-            "SPARK_OUTPUT_DIR": str(tmp_path / "out"), "SPARK_LATENCY_METRICS_ENABLED": "true"})
+            "SPARK_LATENCY_METRICS_ENABLED": "true",
+            "SPARK_CLICKHOUSE_JDBC_URL": "jdbc:clickhouse:http://clickhouse:8123",
+            "SPARK_CLICKHOUSE_HTTP_URL": "http://clickhouse:8123", "CLICKHOUSE_SPARK_PASSWORD": "x",
+            "SPARK_JDBC_BATCH_SIZE": "50000", "SPARK_JDBC_NUM_PARTITIONS": "3"})
 
-    def test_건수_로그와_출력(self, spark, config, monkeypatch, caplog):
-        """배치 로그 JSON 의 input = order + excluded + dlq, 출력 행수·DLQ 건수 일치, 중복 제거."""
+    def test_건수_로그와_출력(self, spark, config, monkeypatch, caplog, orders_out, ops_rows):
+        """배치 로그 JSON 의 input = order + excluded + dlq, 출력 행수·DLQ 건수 일치, 중복 제거, 추적 컬럼."""
         captured = {}
         monkeypatch.setattr(batch, "write_dlq", lambda records, cfg: captured.setdefault("dlq", records.collect()))
         vals = mixed_values() + [sample_bytes("valid_order_completed.json")]  # 중복 event_id 1건 추가
+        context = {"query_id": "q-1", "run_id": "r-1"}
         with caplog.at_level("INFO", logger="streaming"):
-            batch.process_batch(frame(spark, vals), 7, config)
+            batch.process_batch(frame(spark, vals), 7, config, context)
         msg = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("batch "))
         log = json.loads(msg[len("batch "):])
         assert log == {"batch_id": 7, "input": 9, "order": 3, "excluded": 1, "dlq": 5}
         assert log["input"] == log["order"] + log["excluded"] + log["dlq"] == len(vals)
-        out = spark.read.parquet(config.output_dir)
-        assert out.count() == 2  # 배치 내 event_id 중복 제거: 3 → 2
-        assert len(out.columns) == 35
+        assert len(orders_out["rows"]) == 2  # 배치 내 event_id 중복 제거: 3 → 2
+        assert len(orders_out["columns"]) == 39  # 이벤트 31 + Kafka 4 + Spark 추적 4
+        assert orders_out["columns"][-4:] == ["spark_query_id", "spark_run_id", "spark_batch_id", "spark_processed_at"]
+        metrics = json.loads(next(r.getMessage()[8:] for r in caplog.records if r.getMessage().startswith("latency ")))
+        row = orders_out["rows"][0]
+        assert (row["spark_query_id"], row["spark_run_id"], row["spark_batch_id"]) == ("q-1", "r-1", 7)
+        assert row["spark_processed_at"].isoformat(timespec="milliseconds") == metrics["callback_started_at"][:23]
         assert len(captured["dlq"]) == 5
+        [(table, [attempt])] = ops_rows
+        assert table == "ops.spark_batch_attempts"
+        assert (attempt["status"], attempt["input_rows"], attempt["order_rows"], attempt["dlq_rows"]) == (
+            "succeeded", 9, 3, 5)
+        assert (attempt["query_id"], attempt["batch_id"], attempt["failed_stage"]) == ("q-1", 7, "")
 
-    def test_지연_계측_끄면_건수와_출력은_같고_지연은_null(self, spark, config, monkeypatch, caplog):
+    def test_지연_계측_끄면_건수와_출력은_같고_지연은_null(self, spark, config, monkeypatch, caplog, orders_out, ops_rows):
         """끔 설정은 지연 집계만 생략한다. 건수 로그·정상 출력·DLQ 건수는 켬과 같다."""
         captured = {}
         monkeypatch.setattr(batch, "write_dlq", lambda records, cfg: captured.setdefault("dlq", records.collect()))
@@ -298,23 +328,25 @@ class TestProcessBatch:
         assert log == {"batch_id": 7, "input": 8, "order": 2, "excluded": 1, "dlq": 5}
         assert metrics["status"] == "succeeded" and metrics["kafka_to_callback_start_ms"] is None
         assert metrics["classification_and_metrics_action_ms"] >= 0
-        assert spark.read.parquet(off.output_dir).count() == 2
+        assert len(orders_out["rows"]) == 2
         assert len(captured["dlq"]) == 5
+        [(_, [attempt])] = ops_rows
+        assert attempt["kafka_to_callback_ms_count"] == 0 and attempt["kafka_to_callback_ms_p95"] == 0.0
 
-    def test_DLQ_없으면_DLQ_쓰기_생략(self, spark, config, monkeypatch):
+    def test_DLQ_없으면_DLQ_쓰기_생략(self, spark, config, monkeypatch, orders_out):
         """불량이 없으면 write_dlq 를 호출하지 않는다."""
         calls = []
         monkeypatch.setattr(batch, "write_dlq", lambda *a: calls.append(a))
         batch.process_batch(frame(spark, [sample_bytes("valid_order_completed.json")]), 1, config)
         assert calls == []
 
-    def test_정상_없으면_정상_쓰기_생략(self, spark, config, monkeypatch, tmp_path):
-        """정상이 없으면 Parquet 을 만들지 않는다."""
+    def test_정상_없으면_정상_쓰기_생략(self, spark, config, monkeypatch, orders_out):
+        """정상이 없으면 write_orders 를 호출하지 않는다."""
         monkeypatch.setattr(batch, "write_dlq", lambda *a: None)
         batch.process_batch(frame(spark, [sample_bytes("valid_health_check.json"), b"{"]), 1, config)
-        assert not (tmp_path / "out").exists()
+        assert orders_out == {}
 
-    def test_DLQ_쓰기_실패는_배치_실패로_전파(self, spark, config, monkeypatch, caplog):
+    def test_DLQ_쓰기_실패는_배치_실패로_전파(self, spark, config, monkeypatch, caplog, ops_rows):
         """write_dlq 예외가 숨겨지지 않고 올라가며 성공 건수 로그를 남기지 않는다."""
         def boom(*a):
             raise RuntimeError("dlq down")
@@ -329,6 +361,9 @@ class TestProcessBatch:
         assert metrics["dlq_write_action_ms"] >= 0
         assert metrics["orders_write_action_ms"] is None
         assert metrics["callback_total_ms"] >= metrics["dlq_write_action_ms"]
+        [(_, [attempt])] = ops_rows  # 실패한 시도도 운영 지표에 남는다.
+        assert (attempt["status"], attempt["failed_stage"], attempt["orders_write_ms"]) == (
+            "failed", "dlq_write_action", 0.0)
 
     def test_정상_쓰기_실패는_전파(self, spark, config, monkeypatch):
         """write_orders 예외 전파."""
@@ -445,6 +480,7 @@ def test_스트리밍_지연주입과_실행키_연결(spark, tmp_path, monkeypa
         time.sleep(0.15)
 
     monkeypatch.setattr(batch, "write_orders", slow_write)
+    monkeypatch.setattr(batch, "insert_rows", lambda *a: None)
     # 쓰기 함수를 대체했으므로 콜백이 읽는 설정은 지연 계측 여부뿐이다.
     stub_config = types.SimpleNamespace(latency_metrics_enabled=True)
     source = spark.readStream.schema(INPUT_SCHEMA).json(str(input_dir))

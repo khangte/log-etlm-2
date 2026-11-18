@@ -6,14 +6,26 @@ import time
 from datetime import datetime, timezone
 
 from pyspark.sql import DataFrame
+from pyspark.sql import functions as F
 
 from streaming.config import Config
 from streaming.monitoring import summarize_batch
+from streaming.ops_metrics import BATCH_ATTEMPTS_TABLE, batch_attempt_row, insert_rows
 from streaming.sinks import write_dlq, write_orders
 from streaming.transforms import (DLQ, EXCLUDED, ORDER, build_dlq_records, classify_batch, deduplicate_events,
                                   select_orders)
 
 log = logging.getLogger("streaming")
+
+
+def with_spark_columns(orders: DataFrame, metrics: dict, callback_started_at: datetime) -> DataFrame:
+    """ClickHouse 추적 컬럼(쿼리·실행·배치 ID, 콜백 진입 시각)을 붙인다. 같은 배치의 운영 지표 행과 같은 값이다."""
+    return orders.select(
+        "*",
+        F.lit(metrics.get("query_id", "")).alias("spark_query_id"),
+        F.lit(metrics.get("run_id", "")).alias("spark_run_id"),
+        F.lit(metrics["batch_id"]).cast("long").alias("spark_batch_id"),
+        F.lit(callback_started_at).alias("spark_processed_at"))
 
 
 def process_batch(batch: DataFrame, batch_id: int, config: Config, query_context: dict | None = None) -> None:
@@ -27,6 +39,7 @@ def process_batch(batch: DataFrame, batch_id: int, config: Config, query_context
                "orders_write_action_ms": None, "dlq_write_action_ms": None,
                "kafka_to_callback_start_ms": None}
     classified = None
+    counts = {}
     stage = "classification_and_metrics_action"
     try:
         action_clock = time.perf_counter()
@@ -38,7 +51,9 @@ def process_batch(batch: DataFrame, batch_id: int, config: Config, query_context
         finally:
             metrics["classification_and_metrics_action_ms"] = (time.perf_counter() - action_clock) * 1000
         for outcome, writer, frame_builder, stage in (
-            (ORDER, write_orders, lambda frame: deduplicate_events(select_orders(frame)), "orders_write_action"),
+            (ORDER, write_orders,
+             lambda frame: with_spark_columns(deduplicate_events(select_orders(frame)), metrics, callback_started_at),
+             "orders_write_action"),
             (DLQ, write_dlq, build_dlq_records, "dlq_write_action"),
         ):
             if counts.get(outcome):
@@ -65,3 +80,5 @@ def process_batch(batch: DataFrame, batch_id: int, config: Config, query_context
         finally:
             metrics["callback_total_ms"] = (time.perf_counter() - callback_clock) * 1000
             log.info("latency %s", json.dumps(metrics, allow_nan=False))
+            # 실패한 시도도 기록한다. insert_rows는 예외를 올리지 않으므로 원래 배치 예외를 가리지 않는다.
+            insert_rows(config, BATCH_ATTEMPTS_TABLE, [batch_attempt_row(metrics, counts)])

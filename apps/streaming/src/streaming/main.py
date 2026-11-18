@@ -31,7 +31,7 @@ def main() -> None:
     config = load_config()
     spark = build_spark(config)
     query_context = {}
-    listener = ProgressLogger(query_context)
+    listener = ProgressLogger(query_context, config)
     query = None
     try:
         spark.streams.addListener(listener)
