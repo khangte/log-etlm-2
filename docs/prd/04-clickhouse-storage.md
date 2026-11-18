@@ -577,7 +577,7 @@ JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한�
 
 ### 멈춤 감시·자동 재시작 검증 (2026-11-18)
 
-**판정: 통과.** [Spark PRD 쓰기 보장과 장애 경계](03-stream-processing.md#쓰기-보장과-장애-경계)의 멈춤 감시(`SPARK_STALL_TIMEOUT_SECONDS` 90초)·Compose `restart: on-failure:5`·DLQ 전송 타임아웃(30초)을 구현한 뒤, 한 체크포인트에서 장애 3개를 차례로 주입했다. 재시작 4회 모두 사람 개입 없이 복구됐고 정상 주문·DLQ 누락은 없다. 위 1차 실행의 `StackOverflowError` 멈춤은 2회 재현됐다. 근거: [측정 JSON](../measurements/2026-11-18-spark-stall-recovery.json).
+**판정: 통과.** [Spark PRD 쓰기 보장과 장애 경계](03-stream-processing.md#쓰기-보장과-장애-경계)의 멈춤 감시(`SPARK_STALL_TIMEOUT_SECONDS` 90초)·Compose `restart: on-failure:5`(이후 상한 제거, PRD 03 참조)·DLQ 전송 타임아웃(30초)을 구현한 뒤, 한 체크포인트에서 장애 3개를 차례로 주입했다. 재시작 4회 모두 사람 개입 없이 복구됐고 정상 주문·DLQ 누락은 없다. 위 1차 실행의 `StackOverflowError` 멈춤은 2회 재현됐다. 근거: [측정 JSON](../measurements/2026-11-18-spark-stall-recovery.json).
 
 - 실행: 15:46:33~15:57:40 KST, 생성기 2,000 EPS·660초, Compose `spark` 서비스(체크포인트 `ch-stall2-20261118`, `startingOffsets=latest`).
 
@@ -592,7 +592,7 @@ JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한�
 - 배출: 생성기 종료 6초 뒤 backlog 0. 최종 `RestartCount` 4로 상한 5에 닿지 않았다.
 - 복구 시간: 멈춤은 마지막 이벤트 뒤 90~95초에 감지되고, 재시작 후 쿼리 시작까지 7~9초다. 예외로 끝나는 DLQ 실패는 약 30초 뒤 종료된다(이전 120초).
 - 멈춤 재현 조건: `MESSAGE_TOO_LARGE` 분할 재시도 중 토픽 설정을 되돌리면 producer 네트워크 스레드가 `StackOverflowError`로 죽는다(3회 중 3회). 원인은 Kafka 클라이언트 내부로 보고, 근본 수정 대신 감시·재시작으로 복구한다.
-- 재시작 상한: 앞선 시도(`ch-stall-20261118`)는 Kafka·ClickHouse가 꺼진 상태라 bootstrap 주소 해석 실패로 5회 연속 재시작 뒤 멈췄다. 상한 동작은 확인했고, 결과 대조에서는 제외했다.
+- 재시작 상한: 앞선 시도(`ch-stall-20261118`)는 Kafka·ClickHouse가 꺼진 상태라 bootstrap 주소 해석 실패로 5회 연속 재시작 뒤 멈췄다. 상한 동작은 확인했고, 결과 대조에서는 제외했다(이후 상한 제거, PRD 03 참조).
 - 코드 보정: 첫 실행에서 감시 기준 시각이 `query_context`에 들어가 시작·배치 지표 로그에 섞였다. 리스너의 별도 값으로 분리한 뒤 S1만 다시 실행해 16:03:02 감시 종료 → 16:03:09 재시작, 물리 = 고유 373,993을 확인했다.
 - 남은 한계: 감시는 Driver Python 프로세스 안 스레드다. 이 프로세스 자체가 멈추거나 이벤트는 오는데 처리량만 0인 경우는 감지하지 못하며, 진행 행 공백 경보(5단계 Grafana)가 이를 보완한다.
 
