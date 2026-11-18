@@ -35,6 +35,7 @@ class Config:
     clickhouse_password: str = field(repr=False)  # spark_writer 계정 비밀번호. 로그·repr에 남기지 않는다.
     jdbc_batch_size: int  # 쓰기 파티션당 INSERT 1회가 되도록 maxOffsetsPerTrigger와 같게 둔다.
     jdbc_num_partitions: int  # ClickHouse 동시 JDBC 연결 수
+    stall_timeout_seconds: int  # 진행·유휴 이벤트가 이 시간 동안 없으면 멈춤으로 보고 exit 1
 
 
 def _value(environ: Mapping[str, str], key: str) -> str:
@@ -86,4 +87,5 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         clickhouse_password=_value(env, "CLICKHOUSE_SPARK_PASSWORD"),
         jdbc_batch_size=_positive_int(env, "SPARK_JDBC_BATCH_SIZE"),
         jdbc_num_partitions=_positive_int(env, "SPARK_JDBC_NUM_PARTITIONS"),
+        stall_timeout_seconds=_positive_int(env, "SPARK_STALL_TIMEOUT_SECONDS"),
     )

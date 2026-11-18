@@ -45,6 +45,11 @@ Grafana → ClickHouse 조회 → 대시보드 표시
 - 마이크로배치 하나는 여러 Spark 파티션과 JDBC INSERT로 나뉠 수 있다. JDBC의 배치 크기는 스트리밍 트리거의 입력 건수와 별개다. 마이크로배치 전체를 하나의 ClickHouse 트랜잭션으로 간주하지 않는다.
 - 일부 JDBC 쓰기 성공 후 태스크 또는 쿼리를 재실행하면 중복이 발생할 수 있다. Kafka 원본 위치(topic·partition·offset)에 따른 재처리 중복과 `event_id`가 같은 이벤트의 재발행을 구분해 정책을 정한다.
 - 정상 적재와 DLQ 기록은 원자적으로 완료되지 않는다. 어느 한쪽이라도 실패하면 예외를 숨기지 않고 쿼리를 실패시키며, 복구 후 같은 체크포인트로 재시작한다. 이미 성공한 출력의 중복 처리도 필요하다.
+- 실패는 빨리 드러내고 재시작은 외부 관리자가 맡는다(4단계 추가). 앱은 스스로 재시도·재시작하지 않는다. 구현·검증: [멈춤 감시·자동 재시작 검증](04-clickhouse-storage.md#멈춤-감시자동-재시작-검증-2026-11-18).
+  - 멈춤 감시: 실패가 예외로 끝나지 않고 멈추는 경우가 있다([4단계 DLQ 쓰기 실패 주입](04-clickhouse-storage.md#dlq-쓰기-실패-주입-결과-2026-11-18)에서 producer 네트워크 스레드가 죽어 `flush`가 무기한 대기). 배치가 멈추면 진행 이벤트도 오지 않으므로 리스너만으로는 알 수 없다. Driver 감시 스레드가 마지막 진행·유휴 이벤트 시각을 보고, `SPARK_STALL_TIMEOUT_SECONDS` 동안 없으면 로그를 남기고 프로세스를 exit 1로 끝낸다. 멈춘 태스크는 정상 종료(`query.stop()`)도 끝나지 않을 수 있어 바로 종료한다.
+  - 자동 재시작: Compose `restart: on-failure:5`가 같은 체크포인트로 다시 띄운다. 예외로 끝난 실패(exit 1)도 같이 재시작된다. 연속 5회 실패하면 멈추고, 사람이 확인한다(경보는 5단계 Grafana).
+  - DLQ 전송 타임아웃: DLQ producer는 `delivery.timeout.ms` 30초·`request.timeout.ms` 15초로 둔다(기본 120초·30초). 전송 실패가 30초 안에 예외로 드러나 시도 행(`dlq_write_action`)이 남는다. 네트워크 스레드가 죽은 경우는 타임아웃이 동작하지 않으므로 멈춤 감시가 필요하다.
+  - 비교한 대안: DLQ 쓰기를 앱 안 재시도로 감싸기(실패를 숨김), 사람이 재시작(4단계 관찰에서 3.8분간 감지 못 함), DLQ 실패를 무시하고 배치 성공 처리(유실).
 - 적재 방식은 Spark의 범용 JDBC writer와 ClickHouse JDBC Driver 조합으로 고정한다. Spark·Java·JDBC Driver 버전과 타입 매핑은 구현 전에 호환성을 확인해 고정한다.
 
 참고: [Spark foreachBatch](https://spark.apache.org/docs/latest/streaming/apis-on-dataframes-and-datasets.html#using-foreach-and-foreachbatch), [Spark JDBC 설정](https://spark.apache.org/docs/latest/sql-data-sources-jdbc.html), [ClickHouse Spark JDBC 연동](https://clickhouse.com/docs/integrations/apache-spark/spark-jdbc).
@@ -242,6 +247,7 @@ Spark는 단일 컨테이너의 local 모드로 실행한다. 아래 값은 PRD 
 | `SPARK_STARTING_OFFSETS` | `earliest` | [Kafka PRD](02-kafka-ingestion.md)의 최초 실행 기준. 재시작은 체크포인트 위치가 우선한다. |
 | `SPARK_KAFKA_BOOTSTRAP_SERVERS` | `kafka:19092` | Compose 내부 주소. |
 | `SPARK_LATENCY_METRICS_ENABLED` | `true` | `false`면 지연 분위수 집계를 생략하고 건수만 집계한다. [계측 오버헤드 대조군](#3-계측-오버헤드-대조군) 전용이다. 값은 `true`·`false`만 허용하며, 기존 로컬 `.env`와 호환되도록 Compose가 기본값 `true`를 넣는다. |
+| `SPARK_STALL_TIMEOUT_SECONDS` (4단계 추가) | `90` | 진행·유휴 이벤트가 이 시간 동안 없으면 멈춤으로 보고 exit 1([쓰기 보장과 장애 경계](#쓰기-보장과-장애-경계)). 정상 실패가 예외로 드러나는 최대 시간(DLQ 전송 30초, Kafka 메타데이터 대기 기본 60초)보다 길고, 평시 배치 2~5초·유휴 이벤트 간격 약 10초보다 충분히 길다. 기존 로컬 `.env`와 호환되도록 Compose가 기본값 `90`을 넣는다. |
 
 - 토픽 이름은 기존 `KAFKA_TOPIC`·`KAFKA_DLQ_TOPIC`을 재사용한다. JDBC 배치 크기·쓰기 병렬도는 3단계에서 사용하지 않으므로 ClickHouse JDBC URL·계정과 함께 4단계에서 추가한다.
 - `SPARK_MASTER`·`SPARK_DRIVER_MEMORY`는 Compose가 `spark-submit`의 `--master`·`--driver-memory`로 전달한다. 나머지는 `config.py`가 기본값 없이 읽는다.

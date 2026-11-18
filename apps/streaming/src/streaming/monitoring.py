@@ -2,6 +2,10 @@
 
 import json
 import logging
+import os
+import threading
+import time
+from collections.abc import Callable
 from datetime import datetime
 
 from pyspark.sql import DataFrame
@@ -60,14 +64,18 @@ class ProgressLogger(StreamingQueryListener):
         super().__init__()
         self.query_context = query_context if query_context is not None else {}
         self.config = config
+        # 멈춤 감시 기준 시각. 배치 지표로 퍼지지 않도록 query_context와 분리한다.
+        self.heartbeat = {"last_event_at": time.monotonic()}
 
     def onQueryStarted(self, event):
         """쿼리 id·runId를 남긴다. 재시작 시 runId로 실행을 구분한다."""
-        self.query_context.update(query_id=str(event.id), run_id=str(event.runId))
-        log.info("query started %s", json.dumps(self.query_context))
+        ids = {"query_id": str(event.id), "run_id": str(event.runId)}
+        self.query_context.update(ids)
+        log.info("query started %s", json.dumps(ids))
 
     def onQueryProgress(self, event):
         """배치 ID·입력 건수·파티션별 offset 범위·처리속도·durationMs를 담은 진행 정보를 남긴다."""
+        self.heartbeat["last_event_at"] = time.monotonic()
         log.info("progress %s", event.progress.json)
         if self.config is not None:
             try:
@@ -78,9 +86,48 @@ class ProgressLogger(StreamingQueryListener):
             insert_rows(self.config, QUERY_PROGRESS_TABLE, [row])
 
     def onQueryIdle(self, event):
-        """새 데이터가 없는 트리거는 기록하지 않는다."""
+        """새 데이터가 없는 트리거는 기록하지 않는다. 멈춤 감시용 마지막 이벤트 시각만 갱신한다."""
+        self.heartbeat["last_event_at"] = time.monotonic()
 
     def onQueryTerminated(self, event):
         """종료 원인 예외를 남긴다."""
         log.info("query terminated %s", json.dumps(
             {"id": str(event.id), "run_id": str(event.runId), "exception": event.exception}))
+
+
+class StallWatchdog(threading.Thread):
+    """진행·유휴 이벤트가 timeout초 동안 없으면 멈춤으로 보고 프로세스를 exit 1로 끝낸다.
+
+    배치가 멈추면 진행 이벤트도 오지 않아 리스너만으로는 감지할 수 없다. 멈춘 태스크는
+    query.stop()도 끝나지 않을 수 있으므로 정상 종료를 시도하지 않고 바로 종료하며,
+    재시작은 Compose restart 정책에 맡긴다. 기준 시각은 ProgressLogger.heartbeat["last_event_at"]이다.
+    """
+
+    def __init__(self, heartbeat: dict, query_context: dict, timeout: float, interval: float = 5.0,
+                 clock: Callable[[], float] = time.monotonic, exit_fn: Callable[[int], None] = os._exit):
+        """감시 시작 시각을 첫 기준으로 둔다. clock·exit_fn은 테스트에서 바꿔 넣는다."""
+        super().__init__(name="stall-watchdog", daemon=True)
+        self.heartbeat, self.query_context, self.timeout, self.interval = heartbeat, query_context, timeout, interval
+        self.clock, self.exit_fn = clock, exit_fn
+        self.stopped = threading.Event()
+        self.heartbeat["last_event_at"] = clock()
+
+    def check(self) -> bool:
+        """멈춤이면 오류 로그를 남기고 exit_fn(1)을 호출한 뒤 True를 돌려준다."""
+        idle = self.clock() - self.heartbeat["last_event_at"]
+        if idle <= self.timeout:
+            return False
+        log.error("query stalled: no progress or idle event for %.0fs (timeout %ss), exiting for restart %s",
+                  idle, self.timeout, json.dumps(self.query_context))
+        self.exit_fn(1)
+        return True
+
+    def run(self):
+        """stop() 전까지 interval마다 확인한다."""
+        while not self.stopped.wait(self.interval):
+            if self.check():
+                return
+
+    def stop(self):
+        """정상 종료 경로에서 감시를 끝낸다."""
+        self.stopped.set()

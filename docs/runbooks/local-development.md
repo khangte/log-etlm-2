@@ -166,7 +166,7 @@ docker compose stop spark                   # 중지. 체크포인트 볼륨은 
 
 ### 같은 체크포인트로 재시작
 
-`docker compose stop spark` 뒤 `docker compose up -d spark`로 다시 시작하면 같은 `SPARK_CHECKPOINT_DIR`을 사용한다. 체크포인트가 있으면 `SPARK_STARTING_OFFSETS`는 무시되고 마지막 커밋 offset부터 이어 읽는다. 커밋되지 않은 배치는 같은 `batch_id`·offset 범위로 다시 실행된다. 쿼리가 실패해 컨테이너가 종료한 경우에도 원인을 해결한 뒤 같은 방법으로 재시작한다.
+`docker compose stop spark` 뒤 `docker compose up -d spark`로 다시 시작하면 같은 `SPARK_CHECKPOINT_DIR`을 사용한다. spark 서비스는 `restart: on-failure:5`라 쿼리 실패·멈춤 감시 종료(exit 1) 때 자동으로 같은 체크포인트로 재시작하며, `docker compose stop`으로 직접 멈춘 경우는 재시작하지 않는다. 체크포인트가 있으면 `SPARK_STARTING_OFFSETS`는 무시되고 마지막 커밋 offset부터 이어 읽는다. 커밋되지 않은 배치는 같은 `batch_id`·offset 범위로 다시 실행된다. 쿼리가 실패해 컨테이너가 종료한 경우에도 원인을 해결한 뒤 같은 방법으로 재시작한다.
 
 ### 테스트
 
@@ -197,8 +197,8 @@ docker compose run -d --no-deps --name <이름> \
 | 증상 | 의미 | 조치 |
 | --- | --- | --- |
 | `failed_stage=orders_write_action`, 예: JDBC 연결·인증 오류 | 정상 적재 실패. DLQ는 시도하지 않았다. 일부 쓰기 파티션은 이미 INSERT됐을 수 있다 | ClickHouse 상태·계정을 고친 뒤 같은 체크포인트·설정으로 재시작한다. 재INSERT 중복은 `gold.orders_deduplicated`(`FINAL`)에서 합쳐진다 |
-| `failed_stage=dlq_write_action`, 예: `MESSAGE_TOO_LARGE` | 정상 출력은 기록됐고 DLQ 쓰기가 실패했다 | DLQ 토픽·브로커 상태를 고친 뒤 같은 체크포인트로 재시작한다. 정상 출력이 해당 배치 정상 건수만큼 중복된다. 실패는 producer `delivery.timeout.ms`(기본 120초) 뒤에 남는다 |
-| 로그에 `splitting and retrying ... MESSAGE_TOO_LARGE`가 이어진 뒤 `Uncaught exception in thread 'kafka-producer-network-thread ...': java.lang.StackOverflowError`, 이후 새 `batch`·`progress` 로그 없음, 컨테이너는 실행 중 | DLQ producer 스레드가 죽어 DLQ 쓰기 태스크가 무기한 대기한다. 장애를 고쳐도 풀리지 않고 쿼리도 종료하지 않는다 | 원인을 고친 뒤 컨테이너를 중지(`docker compose stop spark` 또는 `docker stop <이름>`)하고 같은 체크포인트로 재시작한다. 정상 출력은 위 행과 같이 중복되고, 멈추기 전 기록된 일부 DLQ 메시지는 키로 중복 판별한다 |
+| `failed_stage=dlq_write_action`, 예: `MESSAGE_TOO_LARGE` | 정상 출력은 기록됐고 DLQ 쓰기가 실패했다 | DLQ 토픽·브로커 상태를 고친 뒤 같은 체크포인트로 재시작한다. 정상 출력이 해당 배치 정상 건수만큼 중복된다. Compose `restart: on-failure:5`가 같은 체크포인트로 자동 재시작한다. 실패 행은 DLQ producer `delivery.timeout.ms`(30초) 뒤에 남는다. 장애가 계속되면 재시작이 반복되다 5회 연속 실패 후 멈추므로, 원인을 고친 뒤 `docker compose up -d spark`로 다시 시작한다 |
+| 로그에 `splitting and retrying ... MESSAGE_TOO_LARGE`가 이어진 뒤 `Uncaught exception in thread 'kafka-producer-network-thread ...': java.lang.StackOverflowError`, 이후 새 `batch`·`progress` 로그 없음, 컨테이너는 실행 중 | DLQ producer 스레드가 죽어 DLQ 쓰기 태스크가 무기한 대기한다. 장애를 고쳐도 풀리지 않고 쿼리도 종료하지 않는다 | 멈춤 감시가 `SPARK_STALL_TIMEOUT_SECONDS`(90초) 뒤 `ERROR streaming query stalled: ...`를 남기고 exit 1로 끝내며, Compose가 같은 체크포인트로 자동 재시작한다. 정상 출력은 위 행과 같이 중복되고, 멈추기 전 기록된 일부 DLQ 메시지는 키로 중복 판별한다 |
 | 콜백은 성공했으나 체크포인트 `commits`의 `Permission denied` | 출력은 모두 기록됐고 커밋만 실패했다 | 체크포인트 권한을 고친 뒤 같은 체크포인트로 재시작한다. 정상 출력과 DLQ가 해당 배치 건수만큼 중복된다 |
 | `KafkaIllegalStateException: Some data may have been lost because they are not available in Kafka any more; ...` (원인 `OffsetOutOfRangeException`) | 체크포인트의 다음 offset이 보관 기간·크기 제한으로 이미 삭제됐다. 종료 코드 1이며 소실 구간을 건너뛰고 커밋하지 않는다 | 아래 offset 소실 조치를 따른다 |
 
@@ -286,7 +286,7 @@ SELECT count() FROM (
 - 재시작 후 첫 진행 정보는 `latest_offsets`가 비어 있어 backlog를 계산할 수 없다(위 조회에서 NULL).
 - `orders_write_action` 실패의 원인은 `query_log` 예외 유형으로 가른다. `ExceptionWhileProcessing`이면 ClickHouse가 처리 중 실패해 일부 행이 남았을 수 있고(재시작 시 중복), `ExceptionBeforeStart`(예: 497 권한)이면 저장되지 않았다.
 - `orders_write_ms`와 `query_log` INSERT 시간이 함께 늘면 ClickHouse 쪽, `orders_write_ms`만 늘면 Spark 태스크·네트워크 쪽이다.
-- DLQ(Kafka) 쓰기 장애는 ClickHouse `query_log`에 나타나지 않는다. 최신 `ops.spark_query_progress` 행이 트리거 주기(5초)보다 오래 갱신되지 않으면 콜백이 끝나지 않은 것이다. `failed_stage=dlq_write_action` 행은 약 120초 뒤에 남거나, producer 스레드가 죽으면 남지 않는다(근거: [DLQ 쓰기 실패 주입 결과](../prd/04-clickhouse-storage.md#dlq-쓰기-실패-주입-결과-2026-11-18)).
+- DLQ(Kafka) 쓰기 장애는 ClickHouse `query_log`에 나타나지 않는다. 최신 `ops.spark_query_progress` 행이 트리거 주기(5초)보다 오래 갱신되지 않으면 콜백이 끝나지 않은 것이다. `failed_stage=dlq_write_action` 행은 약 30초 뒤에 남거나, producer 스레드가 죽으면 남지 않고 90초 뒤 멈춤 감시 종료·자동 재시작된다. 재시작 여부는 `docker inspect -f '{{.RestartCount}}' log-etlm-2-spark-1`과 `ops.spark_query_progress`의 `run_id` 변경으로 본다(근거: [DLQ 쓰기 실패 주입 결과](../prd/04-clickhouse-storage.md#dlq-쓰기-실패-주입-결과-2026-11-18)).
 - 재INSERT 중복은 백그라운드 병합이 곧 합치므로 위 물리 중복 조회는 시간이 지나면 0이 될 수 있다. 재INSERT 양은 같은 시간 범위 `query_log` 주문 INSERT `written_rows` 합계와 고유 수의 차이로 본다.
 
 ### 운영 지표 쓰기 실패

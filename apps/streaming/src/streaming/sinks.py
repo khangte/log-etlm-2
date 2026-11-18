@@ -29,5 +29,8 @@ def write_dlq(records: DataFrame, config: Config) -> None:
     (records.write.format("kafka")
      .option("kafka.bootstrap.servers", config.bootstrap_servers)
      .option("kafka.acks", "all")
+     # 전송 실패를 기본 120초 대신 30초 안에 예외로 드러낸다. delivery는 linger + request 이상이어야 한다.
+     .option("kafka.delivery.timeout.ms", "30000")
+     .option("kafka.request.timeout.ms", "15000")
      .option("topic", config.dlq_topic)
      .save())

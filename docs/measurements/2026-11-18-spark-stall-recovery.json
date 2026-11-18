@@ -1,0 +1,333 @@
+{
+ "title": "Spark 멈춤 감시·자동 재시작·DLQ 전송 타임아웃 검증 (2026-11-18)",
+ "setup": {
+  "generator_eps": 2000,
+  "generator_seconds": 660,
+  "stall_timeout_seconds": 90,
+  "dlq_delivery_timeout_ms": 30000,
+  "dlq_request_timeout_ms": 15000,
+  "restart": "on-failure:5",
+  "checkpoint": "/opt/spark/checkpoints/ch-stall2-20261118",
+  "query_id": "5f833bd6-df8a-4071-a046-6406d8c88a6d"
+ },
+ "scenarios": {
+  "S1": "Python worker(pyspark.daemon) SIGSTOP으로 태스크 멈춤",
+  "S2": "DLQ max.message.bytes=100 유지 → 첫 종료 후 약 40초 더 유지 뒤 되돌림",
+  "S3": "DLQ max.message.bytes=100 주입 19초 뒤 되돌림(재시도 중 되돌림)"
+ },
+ "summary": {
+  "restarts": 4,
+  "manual_intervention": 0,
+  "S1": "15:47:36 주입 → 95초 공백 뒤 감시 종료 15:49:11 → 15:49:20 재시작",
+  "S2": "DLQ 전송 30.6초 만에 TimeoutException(시도 행 failed/dlq_write_action, dlq_write_ms 30,583) → exit 1 → 15:52:02 재시작. 재실행 중 되돌림에서 StackOverflowError 멈춤 → 15:53:32 감시 종료 → 15:53:39 재시작",
+  "S3": "되돌림 시 StackOverflowError 멈춤 재현 → 15:55:53 감시 종료 → 15:56:02 재시작",
+  "orders": {
+   "physical": 1121986,
+   "unique": 1121986,
+   "final": 1121986,
+   "succeeded_order_rows": 1121986
+  },
+  "dlq": {
+   "messages": 66122,
+   "unique_keys": 66108,
+   "succeeded_dlq_rows": 66108,
+   "missing": 0,
+   "duplicate_messages": 14
+  },
+  "drain": "생성기 종료 6초 뒤 backlog 0",
+  "smoke_after_fix": "query_context 분리 후 S1 재확인(체크포인트 ch-stall3-20261118): 95초 공백 → 16:03:02 감시 종료 → 16:03:09 재시작, 물리 = 고유 373,993"
+ },
+ "notes": [
+  "첫 실행(ch-stall-20261118)은 Kafka·ClickHouse가 꺼진 상태라 bootstrap 해석 실패로 5회 연속 재시작 후 정지했다(재시작 상한 동작 확인). 결과에서 제외.",
+  "events의 dlq.unique_keys 66,123은 kafka-console-consumer 경고 문구가 키로 섞인 값이다. 경고 줄을 빼고 다시 읽은 값이 summary.dlq(메시지 66,122, 고유 키 66,108)다."
+ ],
+ "events": [
+  {
+   "event": "spark_up",
+   "elapsed": null,
+   "container": "log-etlm-2-spark-1",
+   "kst": "15:46:10"
+  },
+  {
+   "event": "sources_ready",
+   "elapsed": null,
+   "query_id": "5f833bd6-df8a-4071-a046-6406d8c88a6d",
+   "kst": "15:46:22"
+  },
+  {
+   "event": "dlq_offset_start",
+   "elapsed": null,
+   "offset": 1753137,
+   "kst": "15:46:33"
+  },
+  {
+   "event": "generator_started",
+   "elapsed": 0.0,
+   "seconds": 660,
+   "kst": "15:46:33"
+  },
+  {
+   "event": "state",
+   "elapsed": 0.068,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "0",
+   "started_at": "2026-11-18T06:46:10.726459278Z",
+   "kst": "15:46:33"
+  },
+  {
+   "event": "inject_sigstop_workers",
+   "elapsed": 62.97,
+   "pids": "277 280 281 284",
+   "err": "",
+   "kst": "15:47:36"
+  },
+  {
+   "event": "state",
+   "elapsed": 63.139,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "0",
+   "started_at": "2026-11-18T06:46:10.726459278Z",
+   "kst": "15:47:36"
+  },
+  {
+   "event": "state",
+   "elapsed": 159.314,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "1",
+   "started_at": "2026-11-18T06:49:12.528249412Z",
+   "kst": "15:49:12"
+  },
+  {
+   "event": "inject_dlq_too_large",
+   "elapsed": 283.996,
+   "scenario": "S2",
+   "kst": "15:51:17"
+  },
+  {
+   "event": "s2_first_exit_or_timeout",
+   "elapsed": 321.156,
+   "waited": 37.1,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "2",
+   "started_at": "2026-11-18T06:51:53.909483184Z",
+   "kst": "15:51:54"
+  },
+  {
+   "event": "state",
+   "elapsed": 321.192,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "2",
+   "started_at": "2026-11-18T06:51:53.909483184Z",
+   "kst": "15:51:54"
+  },
+  {
+   "event": "revert_dlq_too_large",
+   "elapsed": 364.022,
+   "scenario": "S2",
+   "kst": "15:52:37"
+  },
+  {
+   "event": "state",
+   "elapsed": 364.047,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "2",
+   "started_at": "2026-11-18T06:51:53.909483184Z",
+   "kst": "15:52:37"
+  },
+  {
+   "event": "state",
+   "elapsed": 420.683,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "3",
+   "started_at": "2026-11-18T06:53:32.738580232Z",
+   "kst": "15:53:34"
+  },
+  {
+   "event": "inject_dlq_too_large",
+   "elapsed": 474.066,
+   "scenario": "S3",
+   "kst": "15:54:27"
+  },
+  {
+   "event": "state",
+   "elapsed": 474.117,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "3",
+   "started_at": "2026-11-18T06:53:32.738580232Z",
+   "kst": "15:54:27"
+  },
+  {
+   "event": "revert_dlq_too_large",
+   "elapsed": 493.288,
+   "scenario": "S3",
+   "kst": "15:54:46"
+  },
+  {
+   "event": "state",
+   "elapsed": 493.321,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "3",
+   "started_at": "2026-11-18T06:53:32.738580232Z",
+   "kst": "15:54:46"
+  },
+  {
+   "event": "state",
+   "elapsed": 562.068,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "4",
+   "started_at": "2026-11-18T06:55:54.069750142Z",
+   "kst": "15:55:55"
+  },
+  {
+   "event": "generator_exited",
+   "elapsed": 666.991,
+   "exit_code": 0,
+   "kst": "15:57:40"
+  },
+  {
+   "event": "state",
+   "elapsed": 667.036,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "4",
+   "started_at": "2026-11-18T06:55:54.069750142Z",
+   "kst": "15:57:40"
+  },
+  {
+   "event": "drained",
+   "elapsed": 673.218,
+   "backlog": 0,
+   "kst": "15:57:46"
+  },
+  {
+   "event": "dlq_offset_end",
+   "elapsed": 686.327,
+   "offset": 1819259,
+   "kst": "15:57:59"
+  },
+  {
+   "event": "final_state",
+   "elapsed": 686.362,
+   "status": "running",
+   "exit_code": "0",
+   "restart_count": "4",
+   "started_at": "2026-11-18T06:55:54.069750142Z",
+   "kst": "15:57:59"
+  },
+  {
+   "event": "orders",
+   "elapsed": 686.622,
+   "physical": 1121986,
+   "unique": 1121986,
+   "kst": "15:58:00"
+  },
+  {
+   "event": "orders_final",
+   "elapsed": 687.613,
+   "final": 1121986,
+   "kst": "15:58:01"
+  },
+  {
+   "event": "attempts",
+   "elapsed": 687.623,
+   "rows": [
+    {
+     "run_id": "c7820690-3528-4b4f-a135-54dd6b782428",
+     "batch_id": 29,
+     "status": "failed",
+     "failed_stage": "dlq_write_action",
+     "dlq_write_ms": 30583.311688998947,
+     "callback_total_ms": 32303.108987020096,
+     "at": "2026-11-18 06:51:20.045"
+    }
+   ],
+   "kst": "15:58:01"
+  },
+  {
+   "event": "succeeded",
+   "elapsed": 687.637,
+   "order_rows": 1121986,
+   "dlq_rows": 66108,
+   "batches": 53,
+   "runs": 4,
+   "kst": "15:58:01"
+  },
+  {
+   "event": "dlq",
+   "elapsed": 690.998,
+   "messages": 66137,
+   "unique_keys": 66123,
+   "kst": "15:58:04"
+  }
+ ],
+ "spark_log": [
+  {
+   "kst": "15:46:21",
+   "line": "INFO streaming query started {\"last_event_at\": 134171.940062067, \"query_id\": \"5f833bd6-df8a-4071-a046-6406d8c88a6d\", \"run_id\": \"84a68be1-72f6-4c5c-95d4-eee907eda391\"}"
+  },
+  {
+   "kst": "15:49:11",
+   "line": "ERROR streaming query stalled: no progress or idle event for 95s (timeout 90s), exiting for restart {\"query_id\": \"5f833bd6-df8a-4071-a046-6406d8c88a6d\", \"run_id\": \"84a68be1-72f6-4c5c-95d4-eee907eda391"
+  },
+  {
+   "kst": "15:49:20",
+   "line": "INFO streaming query started {\"last_event_at\": 134353.055008339, \"query_id\": \"5f833bd6-df8a-4071-a046-6406d8c88a6d\", \"run_id\": \"c7820690-3528-4b4f-a135-54dd6b782428\"}"
+  },
+  {
+   "kst": "15:51:52",
+   "line": "INFO streaming query terminated {\"id\": \"5f833bd6-df8a-4071-a046-6406d8c88a6d\", \"run_id\": \"c7820690-3528-4b4f-a135-54dd6b782428\", \"exception\": \"py4j.Py4JException: An exception was raised by the Python"
+  },
+  {
+   "kst": "15:52:02",
+   "line": "INFO streaming query started {\"last_event_at\": 134516.17617719, \"query_id\": \"5f833bd6-df8a-4071-a046-6406d8c88a6d\", \"run_id\": \"f200d526-3b31-42fd-ade8-1ade746f50d0\"}"
+  },
+  {
+   "kst": null,
+   "line": "java.lang.StackOverflowError (producer network thread)"
+  },
+  {
+   "kst": "15:53:32",
+   "line": "ERROR streaming query stalled: no progress or idle event for 91s (timeout 90s), exiting for restart {\"query_id\": \"5f833bd6-df8a-4071-a046-6406d8c88a6d\", \"run_id\": \"f200d526-3b31-42fd-ade8-1ade746f50d0"
+  },
+  {
+   "kst": "15:53:39",
+   "line": "INFO streaming query started {\"last_event_at\": 134613.396253799, \"query_id\": \"5f833bd6-df8a-4071-a046-6406d8c88a6d\", \"run_id\": \"221115de-90a7-4d1c-9d8c-3410c7b18cfc\"}"
+  },
+  {
+   "kst": null,
+   "line": "java.lang.StackOverflowError (producer network thread)"
+  },
+  {
+   "kst": "15:55:53",
+   "line": "ERROR streaming query stalled: no progress or idle event for 90s (timeout 90s), exiting for restart {\"query_id\": \"5f833bd6-df8a-4071-a046-6406d8c88a6d\", \"run_id\": \"221115de-90a7-4d1c-9d8c-3410c7b18cfc"
+  },
+  {
+   "kst": "15:56:02",
+   "line": "INFO streaming query started {\"last_event_at\": 134756.995222289, \"query_id\": \"5f833bd6-df8a-4071-a046-6406d8c88a6d\", \"run_id\": \"31fa7f1e-2038-41cd-a60b-a82401471dd9\"}"
+  }
+ ],
+ "smoke_spark_log": [
+  {
+   "kst": "16:00:47",
+   "line": "INFO streaming query started {\"query_id\": \"a3c8ba91-6d9b-4a8a-9fd9-14871e912f55\", \"run_id\": \"ac4d6550-eb42-4fa9-97c6-3e2c946bf4b3\"}"
+  },
+  {
+   "kst": "16:03:02",
+   "line": "ERROR streaming query stalled: no progress or idle event for 95s (timeout 90s), exiting for restart {\"query_id\": \"a3c8ba91-6d9b-4a8a-9fd9-14871e912f55\", \"run_id\": \"ac4d6550-eb42-4fa9-97c6-3e2c946bf4b3"
+  },
+  {
+   "kst": "16:03:09",
+   "line": "INFO streaming query started {\"query_id\": \"a3c8ba91-6d9b-4a8a-9fd9-14871e912f55\", \"run_id\": \"38b50989-591a-45cc-ab6d-56a65465256f\"}"
+  }
+ ]
+}

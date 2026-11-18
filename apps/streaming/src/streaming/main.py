@@ -9,7 +9,7 @@ from pyspark.sql import SparkSession
 
 from streaming.batch import process_batch
 from streaming.config import Config, load_config
-from streaming.monitoring import ProgressLogger
+from streaming.monitoring import ProgressLogger, StallWatchdog
 from streaming.sources import read_kafka
 
 
@@ -33,6 +33,7 @@ def main() -> None:
     query_context = {}
     listener = ProgressLogger(query_context, config)
     query = None
+    watchdog = StallWatchdog(listener.heartbeat, query_context, config.stall_timeout_seconds)
     try:
         spark.streams.addListener(listener)
         source = read_kafka(spark, config)
@@ -45,8 +46,10 @@ def main() -> None:
             .trigger(processingTime=config.trigger_interval)
             .start()
         )
+        watchdog.start()
         query.awaitTermination()
     finally:
+        watchdog.stop()
         try:
             if query is not None and query.isActive:
                 query.stop()

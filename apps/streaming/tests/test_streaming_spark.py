@@ -284,7 +284,7 @@ class TestProcessBatch:
             "KAFKA_DLQ_TOPIC": "dlq.ecommerce.orders.v1", "SPARK_STARTING_OFFSETS": "earliest",
             "SPARK_MAX_OFFSETS_PER_TRIGGER": "100", "SPARK_TRIGGER_INTERVAL": "1 seconds",
             "SPARK_SHUFFLE_PARTITIONS": "3", "SPARK_CHECKPOINT_DIR": str(tmp_path / "ckpt"),
-            "SPARK_LATENCY_METRICS_ENABLED": "true",
+            "SPARK_LATENCY_METRICS_ENABLED": "true", "SPARK_STALL_TIMEOUT_SECONDS": "90",
             "SPARK_CLICKHOUSE_JDBC_URL": "jdbc:clickhouse:http://clickhouse:8123",
             "SPARK_CLICKHOUSE_HTTP_URL": "http://clickhouse:8123", "CLICKHOUSE_SPARK_PASSWORD": "x",
             "SPARK_JDBC_BATCH_SIZE": "50000", "SPARK_JDBC_NUM_PARTITIONS": "3"})
