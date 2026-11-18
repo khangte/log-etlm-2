@@ -1,0 +1,83 @@
+{
+  "title": "5단계 Grafana 대시보드·경보 지속 부하와 장애 주입 측정",
+  "setup": {
+    "grafana": "grafana/grafana:13.2.6, grafana-clickhouse-datasource 4.23.5, cpus 0.5, mem_limit 512m",
+    "spark": "측정용 컨테이너 gf-load-20261118, 체크포인트 /opt/spark/checkpoints/gf-load-20261118, startingOffsets=latest, query_id fb3aa5ab-714f-4524-acde-dbfcf05799b7",
+    "dashboard_load": "브라우저 대신 스크립트가 /api/ds/query로 운영 대시보드 패널을 5초마다, 주문 대시보드 패널을 60초마다 동시에 요청(조회 범위 now-15m)",
+    "steady_window_utc": {"run1": "08:03:00~08:17:00", "run2": "08:26:45~08:41:40"}
+  },
+  "run1_per_panel_final": {
+    "note": "주문 대시보드 패널마다 FINAL 조회 7개(1분마다 동시 실행), 충돌 경보는 event_id 문자열 + uniqExact",
+    "generator": {"eps_target": 5000, "seconds": 1020, "acked": 5072573, "failed": 0, "undelivered": 0, "ack_eps": 4973.5, "normal_order": 4311419},
+    "rows": {"physical": 4311419, "unique_event_id": 4311419},
+    "trigger_ms": {"max": 8489, "p95": 4058, "over_5s": 2, "count": 181},
+    "kafka_to_callback_batch_p95_max_ms": 8176,
+    "insert_server_ms": {"p95": 256, "max": 1290, "count": 1076, "failed": 0},
+    "parts_per_partition_max": 9,
+    "grafana_reader_server_ms": {
+      "orders_final": {"n": 91, "p50": 534, "p95": 1527, "max": 1641},
+      "conflict_alert": {"n": 14, "p50": 582, "p95": 1935, "mem_p95_mb": 366.5},
+      "pipeline_latency_view": {"n": 334, "p50": 66, "p95": 432, "mem_p95_mb": 343.1},
+      "pipeline_other": {"n": 2831, "p50": 9, "p95": 40}
+    },
+    "spike_08_13": "08:13:00 주문 대시보드 FINAL 7개 동시(각 0.73~0.87초) + 08:13:14 충돌 경보 1.9초 동안 ClickHouse CPU 180%, 같은 시각 INSERT 0.88~1.29초, 트리거 8.5초",
+    "grafana_memory": {"docker_max_mib": 489.9, "anon_mib": 242, "oom_kill": 0}
+  },
+  "run2_shared_cube": {
+    "note": "주문 대시보드 FINAL 2개(차원 큐브를 -- Dashboard -- 데이터 소스로 공유), 이벤트 지연 패널 quantilesExact 1개로 통합. 충돌 경보는 아직 문자열 키",
+    "generator": {"eps_target": 5000, "seconds": 1020, "acked": 5076232, "failed": 0, "undelivered": 0, "ack_eps": 4977.1, "normal_order": 4315353},
+    "rows": {"physical": 4315353, "unique_event_id": 4315353},
+    "trigger_ms": {"max": 9382, "p95": 3858, "over_5s": 1, "count": 180},
+    "trigger_over_5s_cause": "08:27:10 배치 classification_ms 6848(Spark 측). 같은 시각 ClickHouse CPU 8~49%, 200ms 넘는 Grafana 쿼리 없음, Spark 컨테이너 CPU 약 12초간 1코어 수준",
+    "kafka_to_callback_batch_p95_max_ms": 8519,
+    "insert_server_ms": {"p95": 330, "max": 655, "count": 1074, "failed": 0},
+    "parts_per_partition_max": 9,
+    "grafana_reader_server_ms": {
+      "orders_final": {"n": 50, "p50": 248, "p95": 680, "max": 843},
+      "orders_final_full_15m_window": {"p95": 751, "max_read_rows": 3809893},
+      "conflict_alert_string_key": {"n": 15, "p50": 2396, "p95": 3671, "mem_p95_mb": 785.3},
+      "pipeline_latency_view": {"n": 353, "p50": 70, "p95": 192, "mem_p95_mb": 118.9},
+      "pipeline_other": {"n": 2887, "p50": 7, "p95": 20}
+    },
+    "client_ms_via_grafana": {"orders": {"p50": 108.8, "p95": 395.9}, "pipeline": {"p50": 118.7, "p95": 370.9, "max": 17147.4}},
+    "poll_errors": 0,
+    "grafana_memory": {"docker_max_mib": 511.5, "anon_mib": 244, "oom_kill": 0}
+  },
+  "conflict_check_cost": {
+    "rows_1h": 8626772,
+    "1h_string_uniqExact": {"ms": 2042, "mem_mb": 797},
+    "1h_hash_min_max": {"ms": 749, "mem_mb": 289},
+    "rows_26h": 24437061,
+    "26h_string_uniqExact": {"ms": 52283, "mem_mb": 1990},
+    "26h_string_min_max": {"ms": 24629, "mem_mb": 2032},
+    "26h_hash_min_max": {"ms": 2322, "mem_mb": 804},
+    "decision": "1시간 점검은 해시 키로 변경. 전체 보관 구간 점검은 24시간 분량(약 3.7억 행)에서 약 12GB가 필요해 v1 경보에서 제외"
+  },
+  "orders_1h_range_no_load": {"rows": 9889786, "cube_ms": [798, 667, 739, 673, 804], "minute_series_ms": [172, 147, 142, 159, 191]},
+  "alert_injection": {
+    "generator": {"eps_target": 2000, "seconds": 840, "acked": 1679127, "failed": 0, "normal_order": 1427270},
+    "timeline_utc": [
+      {"ts": "08:45:57", "action": "충돌 행 2개 주입(conflict-test-gf-1, 5분 전·4분 전)"},
+      {"ts": "08:46:13", "alert": "ID 충돌(1시간) firing"},
+      {"ts": "08:46:24", "action": "충돌 행 삭제(0건 확인) 후 pyspark.daemon SIGSTOP"},
+      {"ts": "08:46:51", "alert": "Spark 진행 공백 firing(정지 27초 뒤)"},
+      {"ts": "08:47:13", "alert": "ID 충돌(1시간) inactive"},
+      {"ts": "08:47:55", "event": "Driver 감시 종료 query stalled 94s, exit 1"},
+      {"ts": "08:48:04", "action": "docker start(같은 체크포인트)"},
+      {"ts": "08:48:31", "alert": "Spark 진행 공백 inactive"},
+      {"ts": "08:49:18", "alert": "Spark 재시작 firing(재시작 74초 뒤)"},
+      {"ts": "08:49:25", "action": "REVOKE INSERT ON silver.order_events FROM spark_writer"},
+      {"ts": "08:49:50", "alert": "Spark 진행 공백 firing(Spark 종료)"},
+      {"ts": "08:50:10", "alert": "ClickHouse INSERT 실패 firing"},
+      {"ts": "08:50:14", "alert": "Spark 배치 실패 firing"},
+      {"ts": "08:50:22", "action": "clickhouse-init 재실행으로 권한 복구, docker start"},
+      {"ts": "08:50:50", "alert": "Spark 진행 공백 inactive"},
+      {"ts": "08:55:11", "alert": "ClickHouse INSERT 실패 inactive"},
+      {"ts": "08:55:15", "alert": "Spark 배치 실패 inactive"},
+      {"ts": "08:59:52", "event": "생성기 종료. 이후 09:01:19까지 진행 공백 경보 없음"}
+    ],
+    "rows": {"physical": 1427270, "unique_event_id": 1427270, "final_view": 1427270},
+    "attempts": {"succeeded": 130, "failed_orders_write_action": 1},
+    "final_backlog": 0
+  }
+}

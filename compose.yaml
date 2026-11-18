@@ -163,7 +163,32 @@ services:
     # 실패·멈춤 감시 종료(exit 1) 시 같은 체크포인트로 재시작한다. 횟수 상한(:N)은 컨테이너 수명 누적이라 두지 않는다.
     restart: on-failure
 
+  grafana:
+    image: grafana/grafana:13.2.6
+    # 근거: docs/prd/05-grafana-dashboard.md '실행 구성'. 루프백에만 게시한다.
+    ports:
+      - "127.0.0.1:${GRAFANA_HOST_PORT:?GRAFANA_HOST_PORT is required}:3000"
+    depends_on:
+      clickhouse-init:
+        condition: service_completed_successfully
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?GRAFANA_ADMIN_USER is required}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      # 프로비저닝 전에 설치를 끝내야 데이터 소스 생성이 플러그인 없음으로 실패하지 않는다.
+      GF_PLUGINS_PREINSTALL_SYNC: grafana-clickhouse-datasource@4.23.5
+      # 데이터 소스 프로비저닝 파일이 읽는다.
+      CLICKHOUSE_GRAFANA_PASSWORD: ${CLICKHOUSE_GRAFANA_PASSWORD:?CLICKHOUSE_GRAFANA_PASSWORD is required}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    cpus: 0.5
+    mem_limit: 512m
+
 volumes:
   kafka-data:
   spark-checkpoints:
   clickhouse-data:
+  grafana-data:

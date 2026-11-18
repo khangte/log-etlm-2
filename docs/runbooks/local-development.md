@@ -295,3 +295,38 @@ Spark의 `ops.*` INSERT 실패는 `WARN streaming ops metrics insert failed tabl
 
 생성기의 `ops.producer_stats` INSERT 실패는 stderr에 `{"warning": "producer_stats insert failed", ...}` 한 줄을 남기고 생성은 계속한다. 최종 통계의 `producer_stats.failed_rows`가 잃은 행 수다. 기록을 끄려면 `PRODUCER_CLICKHOUSE_HTTP_URL=`로 실행한다. kafka 출력에서만 기록한다.
 
+
+## 9. Grafana 실행 (5단계)
+
+서비스는 `compose.yaml`의 `grafana`다. `clickhouse-init`(8절)이 완료돼야 시작한다. `.env`에 `.env.example`의 5단계 키(`GRAFANA_HOST_PORT`, `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD`)를 추가하고 관리자 비밀번호를 직접 정한다. 데이터 소스는 4단계 `CLICKHOUSE_GRAFANA_PASSWORD`(`grafana_reader`)를 쓴다. 설계 근거는 [Grafana PRD](../prd/05-grafana-dashboard.md)를 따른다.
+
+```bash
+docker compose up -d grafana     # 첫 기동은 ClickHouse 플러그인을 내려받는다(grafana.com 접속 필요)
+docker compose logs -f grafana   # 기동·프로비저닝 로그
+```
+
+- 접속: `http://localhost:${GRAFANA_HOST_PORT}`(루프백), 관리자 계정으로 로그인한다.
+- 대시보드: `주문 현황`(uid `orders`, 1분 갱신), `파이프라인 운영`(uid `pipeline`, 5초 갱신). 경보 규칙은 `log-etlm` 폴더에 5개가 있으며 외부 알림은 보내지 않는다. 상태는 경보 화면과 대시보드의 경보 패널에서 본다.
+- 원본 파일: 데이터 소스 `infra/grafana/provisioning/datasources/clickhouse.yaml`, 대시보드 `infra/grafana/dashboards/*.json`, 경보 `infra/grafana/provisioning/alerting/rules.yaml`. 화면에서 고친 대시보드는 저장되지 않는다(`allowUiUpdates: false`). 바꾸려면 화면에서 편집한 뒤 JSON 모델을 내보내 파일에 반영한다. 대시보드 파일 변경은 기동 중에도 약 10초 안에 반영되며, 데이터 소스·경보 파일 변경은 `docker compose restart grafana`로 반영한다.
+- 내부 DB(사용자·경보 상태 이력)는 볼륨 `grafana-data`다. 지워도 프로비저닝 파일로 같은 대시보드·경보가 다시 만들어진다.
+- 기동 로그의 `Failed to read plugin provisioning files ... /etc/grafana/provisioning/plugins`는 플러그인 앱 프로비저닝 디렉터리가 없다는 뜻이며 무시한다.
+
+### 상태 확인
+
+```bash
+set -a; . ./.env; set +a
+G=http://127.0.0.1:${GRAFANA_HOST_PORT}; A="$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD"
+curl -s -u "$A" $G/api/datasources/uid/clickhouse/health          # {"status":"OK"}
+curl -s -u "$A" "$G/api/search?type=dash-db"                        # 대시보드 2개
+curl -s -u "$A" $G/api/prometheus/grafana/api/v1/rules              # 경보 규칙 health·state
+```
+
+### 경보 대응
+
+| 경보 | 확인할 것 |
+| --- | --- |
+| Spark 진행 공백 | `docker compose logs spark`에서 쿼리 상태와 `ops metrics insert failed` 경고. 지표 쓰기만 실패해도 공백이 생긴다. 90초 뒤 멈춤 감시가 종료·재시작한다(7절) |
+| Spark 재시작 | `docker inspect -f '{{.RestartCount}}' log-etlm-2-spark-1`과 종료 원인. 지속 실패면 `docker compose stop spark` 후 원인을 고친다(7절 장애와 조치) |
+| Spark 배치 실패 | 파이프라인 운영 대시보드의 '실패 시도' 표에서 `failed_stage` 확인 후 7절 장애와 조치 |
+| ClickHouse INSERT 실패 | 8절 조회의 Spark INSERT 실패 쿼리로 예외 유형 확인 |
+| ID 충돌(1시간) | 8절 조회의 충돌 건수 쿼리. 충돌 구간의 주문 집계는 부풀 수 있다 |

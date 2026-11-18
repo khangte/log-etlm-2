@@ -1,0 +1,19 @@
+# ClickHouse 데이터 소스. 근거: docs/prd/05-grafana-dashboard.md '데이터 소스'
+# 대시보드·경보 규칙이 uid로 참조하므로 uid를 바꾸지 않는다.
+apiVersion: 1
+
+datasources:
+  - name: ClickHouse
+    uid: clickhouse
+    type: grafana-clickhouse-datasource
+    isDefault: true
+    editable: false
+    jsonData:
+      protocol: http
+      host: clickhouse
+      port: 8123
+      username: grafana_reader
+      defaultDatabase: gold
+    secureJsonData:
+      # ${...} 형식은 값 안의 $를 한 번 더 치환하므로 $NAME 형식을 쓴다.
+      password: $CLICKHOUSE_GRAFANA_PASSWORD

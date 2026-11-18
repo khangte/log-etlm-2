@@ -1,0 +1,1290 @@
+{
+  "uid": "pipeline",
+  "title": "파이프라인 운영",
+  "description": "구간별 소요시간과 앞단 대기열로 병목 구간을 판별한다. 5초 자동 갱신. 근거: docs/prd/05-grafana-dashboard.md",
+  "tags": [
+    "log-etlm"
+  ],
+  "timezone": "Asia/Seoul",
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m"
+    ]
+  },
+  "schemaVersion": 41,
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "alertlist",
+      "title": "경보 상태",
+      "description": "Spark 진행 공백·재시작·배치 실패·INSERT 실패·ID 충돌. 외부 알림은 보내지 않는다.",
+      "options": {
+        "viewMode": "list",
+        "groupMode": "default",
+        "maxItems": 20,
+        "sortOrder": 1,
+        "alertName": "",
+        "folder": {
+          "title": "log-etlm"
+        },
+        "stateFilter": {
+          "firing": true,
+          "pending": true,
+          "normal": true,
+          "noData": true,
+          "error": true
+        }
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "type": "stat",
+      "title": "데이터 최신성·Spark 재시작",
+      "description": "최신성 = ClickHouse 현재 시각 − 범위 내 최신 event_timestamp(FINAL 없이 계산해도 최댓값은 같다). 데이터 없으면 '데이터 없음'. 재시작 = 같은 query_id의 run_id 수 − 1.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "rawSql": "SELECT\n  (SELECT if(count() = 0, NULL, dateDiff('millisecond', max(event_timestamp), now64(3)) / 1000)\n   FROM gold.order_event_latency WHERE $__timeFilter(event_timestamp)) AS `데이터 최신성`,\n  (SELECT if(count() = 0, NULL, toInt64(max(c)) - 1)\n   FROM (SELECT query_id, uniqExact(run_id) AS c FROM ops.spark_query_progress\n         WHERE $__timeFilter(trigger_at) GROUP BY query_id)) AS `Spark 재시작 횟수`"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "측정 불가"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "데이터 최신성"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "noValue",
+                "value": "데이터 없음"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "type": "table",
+      "title": "실패 시도(실패 단계별)",
+      "description": "ops.spark_batch_attempts의 실패 시도. 실패 시도의 action 시간은 측정하지 못해 0이므로 시간 패널에서 뺐다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "rawSql": "SELECT failed_stage AS `실패 단계`, count() AS `시도 수`, max(callback_started_at) AS `마지막 실패`\nFROM ops.spark_batch_attempts\nWHERE $__timeFilter(callback_started_at) AND status != 'succeeded'\nGROUP BY failed_stage ORDER BY `시도 수` DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "데이터 없음"
+        },
+        "overrides": []
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "type": "row",
+      "title": "생성기 · Producer → Kafka  (ops.producer_stats, 1초 구간)",
+      "collapsed": false,
+      "panels": [],
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "ACK EPS · 목표 EPS",
+      "description": "1초 구간당 건수 = EPS. ACK가 목표보다 낮고 Producer 큐가 늘면 생성기·Producer 구간이 병목이다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT interval_start AS t, acked AS `ACK`, generated AS `생성`, target_eps AS `목표`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "전송 실패 · Producer 큐",
+      "description": "큐 길이는 구간 최대값.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT interval_start AS t, failed AS `전송 실패`, undelivered AS `미전달`, queue_len_max AS `큐 길이 최대`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "큐 길이 최대"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 8,
+        "y": 8,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "생성·직렬화 시간",
+      "description": "생성 호출 직전 → UTF-8 bytes 반환 직후. EPS 조절 대기 제외. 1초 구간별 분위수이며 구간끼리 합치지 않는다. 건수 0이면 빈칸(측정 불가).",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT interval_start AS t,\n  if(gen_serialize_us_count = 0, NULL, gen_serialize_us_p50) AS p50,\n  if(gen_serialize_us_count = 0, NULL, gen_serialize_us_p95) AS p95,\n  if(gen_serialize_us_count = 0, NULL, gen_serialize_us_p99) AS p99\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "µs",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 16,
+        "y": 8,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Producer ACK 지연",
+      "description": "전송 API 호출 → delivery report(msg.latency()). 1초 구간별 분위수. 생성 → Kafka 지연과 겹치므로 합산하지 않는다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT interval_start AS t,\n  if(ack_latency_ms_count = 0, NULL, ack_latency_ms_p50) AS p50,\n  if(ack_latency_ms_count = 0, NULL, ack_latency_ms_p95) AS p95,\n  if(ack_latency_ms_count = 0, NULL, ack_latency_ms_p99) AS p99,\n  ack_latency_ms_count AS `측정 건수`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "측정 건수"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "생성 → Kafka 지연(생성기 측)",
+      "description": "Kafka LogAppendTime − event_timestamp. 1초 구간별 분위수. ACK 지연과 겹치므로 합산하지 않는다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT interval_start AS t,\n  if(gen_to_kafka_ms_count = 0, NULL, gen_to_kafka_ms_p50) AS p50,\n  if(gen_to_kafka_ms_count = 0, NULL, gen_to_kafka_ms_p95) AS p95,\n  if(gen_to_kafka_ms_count = 0, NULL, gen_to_kafka_ms_p99) AS p99,\n  gen_to_kafka_ms_count AS `측정 건수`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "측정 건수"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "Kafka → Spark",
+      "collapsed": false,
+      "panels": [],
+      "id": 10,
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "이벤트 단위 지연(정상 주문, 5초 구간)",
+      "description": "gold.order_event_latency(이벤트 단위, 재처리 시도 행 포함). 생성→Kafka = LogAppendTime − event_timestamp, Kafka→Spark = 콜백 진입 − LogAppendTime(트리거 준비 시간 포함). 이벤트 시각 5초 구간. 두 구간을 합산하지 않는다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT t,\n  ga AS `생성→Kafka 평균`, gq[1] AS `생성→Kafka p50`, gq[2] AS `생성→Kafka p95`, gq[3] AS `생성→Kafka p99`,\n  sa AS `Kafka→Spark 평균`, sq[1] AS `Kafka→Spark p50`, sq[2] AS `Kafka→Spark p95`, sq[3] AS `Kafka→Spark p99`,\n  n AS `측정 건수`\nFROM (\nSELECT toStartOfInterval(event_timestamp, INTERVAL 5 SECOND) AS t, avg(g) AS ga, quantilesExact(0.5, 0.95, 0.99)(g) AS gq,\n  avg(s) AS sa, quantilesExact(0.5, 0.95, 0.99)(s) AS sq, count() AS n\nFROM (\n  SELECT event_timestamp,\n    dateDiff('millisecond', event_timestamp, kafka_append_timestamp) AS g,\n    dateDiff('millisecond', kafka_append_timestamp, spark_processed_at) AS s\n  FROM gold.order_event_latency WHERE $__timeFilter(event_timestamp)\n)\nGROUP BY t\n) ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "측정 건수"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 12,
+        "h": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Kafka → 콜백 배치별 p95 · 시각 이상",
+      "description": "배치(콜백 시도) 단위 모집단. 이벤트 단위 패널과 다른 모집단이다. 목표: 배치별 p95 6초 이하.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT callback_started_at AS t,\n  if(kafka_to_callback_ms_count = 0, NULL, kafka_to_callback_ms_p95) AS `배치 p95`,\n  if(kafka_to_callback_ms_count = 0, NULL, kafka_to_callback_ms_max) AS `배치 최대`,\n  kafka_ts_missing_count AS `Kafka 시각 누락`, kafka_ts_future_count AS `미래 시각`\nFROM ops.spark_batch_attempts WHERE $__timeFilter(callback_started_at) AND status = 'succeeded' ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1,
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 6000
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Kafka 시각 누락"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "미래 시각"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 12,
+      "gridPos": {
+        "x": 12,
+        "y": 25,
+        "w": 12,
+        "h": 9
+      }
+    },
+    {
+      "type": "row",
+      "title": "Spark",
+      "collapsed": false,
+      "panels": [],
+      "id": 13,
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "트리거 시간",
+      "description": "StreamingQueryProgress.durationMs. 트리거 전체는 출력·체크포인트를 포함하며 순수 정제 시간이 아니다. 트리거 주기 5초를 넘으면 처리가 밀린다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT trigger_at AS t, trigger_execution_ms AS `트리거 전체`, add_batch_ms AS `addBatch`,\n  latest_offset_ms AS `latestOffset`, query_planning_ms AS `queryPlanning`,\n  wal_commit_ms AS `walCommit`, commit_offsets_ms AS `commitOffsets`\nFROM ops.spark_query_progress WHERE $__timeFilter(trigger_at) ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1,
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 5000
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 14,
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "입력 · 처리 EPS",
+      "description": "배치 입력 건수 증가는 backlog가 0이어도 처리가 느려졌다는 신호다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT trigger_at AS t, input_rows_per_sec AS `입력 EPS`, processed_rows_per_sec AS `처리 EPS`,\n  num_input_rows AS `배치 입력 건수`\nFROM ops.spark_query_progress WHERE $__timeFilter(trigger_at) ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "배치 입력 건수"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 15,
+      "gridPos": {
+        "x": 8,
+        "y": 35,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "offset backlog(파티션별)",
+      "description": "latest_offsets − end_offsets(배치 계획 시점, 레코드 수 근사). maxOffsetsPerTrigger 상한 아래에서는 0이므로 backlog 0만으로 정상 판정하지 않는다. 재시작 직후 latest_offsets가 비면 빈칸(측정 불가).",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT trigger_at AS t, concat('p', toString(p)) AS partition,\n  if(empty(latest_offsets), NULL, latest_offsets[p] - end_offsets[p]) AS backlog\nFROM ops.spark_query_progress\nARRAY JOIN mapKeys(if(empty(latest_offsets), end_offsets, latest_offsets)) AS p\nWHERE $__timeFilter(trigger_at) ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 16,
+      "gridPos": {
+        "x": 16,
+        "y": 35,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "콜백 action 시간(성공 시도)",
+      "description": "foreachBatch 콜백 시도별 action 시간. JDBC 쓰기 action은 선행 변환·스케줄링·재시도를 포함할 수 있다. 콜백 전체·트리거 시간과 포함 관계가 있으므로 합산하지 않는다. 실패 시도는 상단 표 참고.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT callback_started_at AS t, classification_ms AS `분류`, orders_write_ms AS `정상 쓰기(JDBC)`,\n  dlq_write_ms AS `DLQ 쓰기`, callback_total_ms AS `콜백 전체`\nFROM ops.spark_batch_attempts WHERE $__timeFilter(callback_started_at) AND status = 'succeeded' ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 17,
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "분류별 건수",
+      "description": "콜백 시도별. 실패 후 재실행된 배치는 시도마다 한 점씩 나온다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT callback_started_at AS t, input_rows AS `입력`, order_rows AS `정상`, excluded_rows AS `제외`, dlq_rows AS `DLQ`\nFROM ops.spark_batch_attempts WHERE $__timeFilter(callback_started_at) ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 18,
+      "gridPos": {
+        "x": 12,
+        "y": 43,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "ClickHouse  (system.query_log · part_log, flush 최대 7.5초 지연)",
+      "collapsed": false,
+      "panels": [],
+      "id": 19,
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "INSERT 서버 처리시간(silver.order_events)",
+      "description": "요청 단위 서버 처리시간(네트워크·클라이언트 대기 제외). Spark JDBC 쓰기 action 시간과 별개 측정 경계다. 목표 p95 500ms 이하.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT toStartOfInterval(event_time, INTERVAL 5 SECOND) AS t,\n  avg(query_duration_ms) AS `평균`, quantileExact(0.5)(query_duration_ms) AS p50,\n  quantileExact(0.95)(query_duration_ms) AS p95, quantileExact(0.99)(query_duration_ms) AS p99,\n  count() AS `요청 수`\nFROM system.query_log\nWHERE event_date >= toDate($__fromTime) AND event_date <= toDate($__toTime) AND $__timeFilter(event_time) AND user = 'spark_writer' AND type = 'QueryFinish'\n  AND query_kind = 'Insert' AND has(tables, 'silver.order_events')\nGROUP BY t ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1,
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "요청 수"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 20,
+      "gridPos": {
+        "x": 0,
+        "y": 52,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "INSERT 실패(spark_writer)",
+      "description": "user·exception_code로 거른다(권한 오류는 tables가 비어 남는다). 실패 요청의 written_rows는 실제 남은 행 수가 아니므로 표시하지 않는다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT toStartOfInterval(event_time, INTERVAL 5 SECOND) AS t, count() AS `실패 요청`\nFROM system.query_log\nWHERE event_date >= toDate($__fromTime) AND event_date <= toDate($__toTime) AND $__timeFilter(event_time) AND user = 'spark_writer' AND exception_code != 0\nGROUP BY t ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          },
+          "noValue": "실패 없음"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 21,
+      "gridPos": {
+        "x": 12,
+        "y": 52,
+        "w": 6,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "part 생성 · 병합(silver.order_events)",
+      "description": "system.part_log.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT toStartOfInterval(event_time, INTERVAL 5 SECOND) AS t, countIf(event_type = 'NewPart') AS `새 part`,\n  countIf(event_type = 'MergeParts') AS `병합`\nFROM system.part_log\nWHERE event_date >= toDate($__fromTime) AND event_date <= toDate($__toTime) AND $__timeFilter(event_time) AND database = 'silver' AND table = 'order_events'\nGROUP BY t ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 22,
+      "gridPos": {
+        "x": 18,
+        "y": 52,
+        "w": 6,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Grafana 조회 서버 시간(grafana_reader)",
+      "description": "대시보드·경보 쿼리의 서버 처리시간. 네트워크·Grafana 백엔드·렌더링은 포함하지 않으며 화면 반영 지연이 아니다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT toStartOfInterval(event_time, INTERVAL 5 SECOND) AS t,\n  quantileExact(0.5)(query_duration_ms) AS p50, quantileExact(0.95)(query_duration_ms) AS p95,\n  max(query_duration_ms) AS `최대`, count() AS `쿼리 수`\nFROM system.query_log\nWHERE event_date >= toDate($__fromTime) AND event_date <= toDate($__toTime) AND $__timeFilter(event_time) AND user = 'grafana_reader' AND type = 'QueryFinish'\nGROUP BY t ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "쿼리 수"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 23,
+      "gridPos": {
+        "x": 0,
+        "y": 60,
+        "w": 24,
+        "h": 8
+      }
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  }
+}
