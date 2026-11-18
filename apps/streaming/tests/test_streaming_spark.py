@@ -25,6 +25,18 @@ INPUT_SCHEMA = StructType([
     StructField("timestampType", IntegerType()),
 ])
 TS = dt.datetime(2026, 11, 16, 6, 8, 1, 456000)  # 세션 시간대 UTC 기준 naive
+# 이벤트 시각 범위 규칙의 기준 시각. 표준 샘플(2026-11-16T06:08:00.123Z)이 범위 안에 들도록 고정한다.
+NOW = dt.datetime(2026, 11, 16, 6, 8, 2, tzinfo=dt.timezone.utc)
+
+
+def classify_batch(source, callback_started_at=NOW):
+    """기준 시각을 NOW로 고정한 transforms.classify_batch."""
+    return transforms.classify_batch(source, callback_started_at)
+
+
+def at(delta: dt.timedelta) -> str:
+    """NOW+delta를 계약 형식(밀리초, Z) 문자열로 만든다."""
+    return (NOW + delta).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 @pytest.fixture(scope="module")
@@ -59,7 +71,7 @@ class TestClassifyAndSelect:
 
     def test_classify_batch_컬럼(self, spark):
         """원문·추적 컬럼과 result 구조체."""
-        df = transforms.classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")]))
+        df = classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")]))
         assert df.columns == ["raw_value", "kafka_topic", "kafka_partition", "kafka_offset",
                               "kafka_append_timestamp", "result"]
         types = {f.name: f.dataType for f in df.schema.fields}
@@ -70,7 +82,7 @@ class TestClassifyAndSelect:
 
     def test_select_orders_35컬럼_타입(self, spark):
         """31개 이벤트 컬럼 + 4개 Kafka 컬럼, PRD 매핑 표의 타입."""
-        orders = transforms.select_orders(transforms.classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")],
+        orders = transforms.select_orders(classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")],
                                                               partition=2, start=77)))
         assert orders.columns == list(ORDER_COLUMNS) + list(transforms.KAFKA_COLUMNS) and len(orders.columns) == 35
         types = {f.name: f.dataType for f in orders.schema.fields}
@@ -87,7 +99,7 @@ class TestClassifyAndSelect:
 
     def test_select_orders_값_보존(self, spark):
         """표준 주문 값과 밀리초·Kafka 위치 보존."""
-        rows = transforms.select_orders(transforms.classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")],
+        rows = transforms.select_orders(classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")],
                                                            partition=2, start=77))).collect()
         assert len(rows) == 1
         r = rows[0].asDict()
@@ -99,7 +111,7 @@ class TestClassifyAndSelect:
 
     def test_event_timestamp_UTC_문자열_표현(self, spark):
         """세션 시간대 UTC 에서 문자열화한 값이 원본 시각과 같다."""
-        df = transforms.select_orders(transforms.classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")])))
+        df = transforms.select_orders(classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")])))
         s = df.select(F.date_format("event_timestamp", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").alias("t")).first()["t"]
         assert s == "2026-11-16T06:08:00.123Z"
 
@@ -108,7 +120,7 @@ class TestClassifyAndSelect:
         v = sample_bytes("valid_order_completed.json")
         o2 = json.loads(v)
         o2["event_id"] = "660e8400-e29b-41d4-a716-446655440000"
-        selected = transforms.select_orders(transforms.classify_batch(frame(spark, [v, v, dump(o2), v])))
+        selected = transforms.select_orders(classify_batch(frame(spark, [v, v, dump(o2), v])))
         assert selected.count() == 4  # 중복 제거는 select_orders 가 아니라 deduplicate_events 책임
         orders = transforms.deduplicate_events(selected)
         assert orders.count() == 2
@@ -116,13 +128,13 @@ class TestClassifyAndSelect:
 
     def test_정상_없는_배치(self, spark):
         """불량·제외만 있어도 select_orders 는 0행."""
-        orders = transforms.select_orders(transforms.classify_batch(frame(spark, [None, sample_bytes("valid_health_check.json")])))
+        orders = transforms.select_orders(classify_batch(frame(spark, [None, sample_bytes("valid_health_check.json")])))
         assert orders.count() == 0 and len(orders.columns) == 35
 
     def test_건수_등식(self, spark):
         """입력 = 정상 + 제외 + 불량."""
         vals = mixed_values()
-        c = transforms.classify_batch(frame(spark, vals)).persist()
+        c = classify_batch(frame(spark, vals)).persist()
         counts = {r["o"]: r["count"] for r in c.groupBy(F.col("result.outcome").alias("o")).count().collect()}
         assert counts == {"order": 2, "excluded": 1, "dlq": 5}
         assert sum(counts.values()) == len(vals)
@@ -130,25 +142,25 @@ class TestClassifyAndSelect:
 
     def test_빈_입력(self, spark):
         """0건 DataFrame 도 예외 없이 처리."""
-        c = transforms.classify_batch(frame(spark, []))
+        c = classify_batch(frame(spark, []))
         assert c.count() == 0
 
     def test_timestampType이_LogAppendTime이_아니면_실패(self, spark):
         """CreateTime(0) 이면 raise_error 로 작업이 실패한다."""
-        c = transforms.classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")], ts_type=0))
+        c = classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")], ts_type=0))
         with pytest.raises(Exception, match="not LogAppendTime"):
             c.persist().collect()
 
     @pytest.mark.parametrize("ts_type", [0, -1, 2])
     def test_select_orders_경로도_timestampType_검사(self, spark, ts_type):
         """정상 출력 경로(select_orders.collect)에서도 실패."""
-        c = transforms.classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")], ts_type=ts_type))
+        c = classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")], ts_type=ts_type))
         with pytest.raises(Exception, match="not LogAppendTime"):
             transforms.select_orders(c).collect()
 
     def test_timestampType_불량_행이_불량_로그에도_실패(self, spark):
         """불량 입력에서도 timestampType 가 틀리면 DLQ 경로에서 실패."""
-        c = transforms.classify_batch(frame(spark, [b"{"], ts_type=0))
+        c = classify_batch(frame(spark, [b"{"], ts_type=0))
         with pytest.raises(Exception, match="not LogAppendTime"):
             transforms.build_dlq_records(c).collect()
 
@@ -156,14 +168,14 @@ class TestClassifyAndSelect:
         """한 건이라도 LogAppendTime 이 아니면 배치 실패."""
         rows = [(sample_bytes("valid_order_completed.json"), TOPIC, 0, 0, TS, 1),
                 (sample_bytes("valid_health_check.json"), TOPIC, 0, 1, TS, 0)]
-        c = transforms.classify_batch(spark.createDataFrame(rows, INPUT_SCHEMA))
+        c = classify_batch(spark.createDataFrame(rows, INPUT_SCHEMA))
         with pytest.raises(Exception, match="not LogAppendTime"):
             c.persist().count()
 
     def test_단독_서로게이트_주문은_UDF를_통과한다(self, spark):
         """JSON \\ud800 단독 서로게이트가 있어도 배치가 죽지 않는다(값은 U+FFFD 로 바뀐다: 관찰 기록용)."""
         raw = sample_bytes("valid_order_completed.json").replace(b'"os":"iOS"', b'"os":"\\ud800"')
-        rows = transforms.select_orders(transforms.classify_batch(frame(spark, [raw]))).select("os").collect()
+        rows = transforms.select_orders(classify_batch(frame(spark, [raw]))).select("os").collect()
         assert len(rows) == 1
 
 
@@ -172,7 +184,7 @@ class TestDlqRecords:
 
     def collect(self, spark, values, **kw):
         """DLQ 레코드를 key → 파싱된 value 로 수집한다."""
-        df = transforms.build_dlq_records(transforms.classify_batch(frame(spark, values, **kw)))
+        df = transforms.build_dlq_records(classify_batch(frame(spark, values, **kw)))
         assert df.columns == ["key", "value"]
         assert isinstance(df.schema["key"].dataType, StringType) and isinstance(df.schema["value"].dataType, StringType)
         return {r["key"]: json.loads(r["value"]) for r in df.collect()}, df
@@ -258,6 +270,11 @@ class TestDlqRecords:
 
 class TestProcessBatch:
     """process_batch: 쓰기 함수는 대체하고 건수·실패 전파를 확인한다."""
+
+    @pytest.fixture(autouse=True)
+    def fixed_clock(self, monkeypatch):
+        """콜백 진입 시각(datetime.now)을 NOW로 고정해 고정 시각 샘플이 이벤트 시각 범위 안에 들게 한다."""
+        monkeypatch.setattr(batch, "datetime", types.SimpleNamespace(now=lambda tz=None: NOW))
 
     @pytest.fixture(autouse=True)
     def ops_rows(self, monkeypatch):
@@ -392,6 +409,73 @@ class TestProcessBatch:
         msg = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("batch "))
         assert json.loads(msg[6:]) == {"batch_id": 3, "input": 0, "order": 0, "excluded": 0, "dlq": 0}
 
+    def test_100시간_넘게_퍼진_배치는_범위_밖만_DLQ(self, spark, config, monkeypatch, caplog, orders_out):
+        """0~119시간 전 주문 120건: 범위 안 25건(0~24시간)만 적재, 95건은 DLQ, 등식 유지, 적재 파티션 26개 이하."""
+        captured = {}
+        monkeypatch.setattr(batch, "write_dlq", lambda records, cfg: captured.setdefault("dlq", records.collect()))
+        doc = json.loads(sample_bytes("valid_order_completed.json"))
+        vals = [dump({**doc, "event_id": f"00000000-0000-4000-8000-{k:012d}", "event_timestamp": at(-dt.timedelta(hours=k))})
+                for k in range(120)]
+        with caplog.at_level("INFO", logger="streaming"):
+            batch.process_batch(frame(spark, vals), 1, config)
+        log = json.loads(next(r.getMessage()[6:] for r in caplog.records if r.getMessage().startswith("batch ")))
+        assert log == {"batch_id": 1, "input": 120, "order": 25, "excluded": 0, "dlq": 95}
+        assert len(orders_out["rows"]) == 25
+        assert len({r["event_timestamp"].replace(minute=0, second=0, microsecond=0) for r in orders_out["rows"]}) <= 26
+        codes = {json.loads(r["value"])["error_code"] for r in captured["dlq"]}
+        assert codes == {"SEMANTIC_TIMESTAMP_OUT_OF_RANGE"} and len(captured["dlq"]) == 95
+
+
+class TestEventTimeWindow:
+    """이벤트 시각 범위 규칙: [NOW − 24시간, NOW + 5분] 밖 주문은 DLQ."""
+
+    def outcomes(self, spark, values):
+        """값 목록을 분류해 offset 순 result 구조체 dict 목록을 돌려준다."""
+        return [r["result"].asDict() for r in classify_batch(frame(spark, values)).orderBy("kafka_offset").collect()]
+
+    @pytest.mark.parametrize("delta, outcome", [
+        (-dt.timedelta(hours=24), "order"),
+        (-dt.timedelta(hours=24, milliseconds=1), "dlq"),
+        (-dt.timedelta(hours=25), "dlq"),
+        (dt.timedelta(minutes=5), "order"),
+        (dt.timedelta(minutes=5, milliseconds=1), "dlq"),
+        (dt.timedelta(0), "order"),
+    ])
+    def test_경계값(self, spark, mutate, delta, outcome):
+        """하한·상한은 포함하고 1ms라도 벗어나면 DLQ. 25시간 전 주문은 DLQ."""
+        [r] = self.outcomes(spark, [mutate(lambda d: d.update(event_timestamp=at(delta)))])
+        assert r["outcome"] == outcome
+        if outcome == "dlq":
+            assert (r["error_stage"], r["error_code"], r["error_path"]) == (
+                "semantic", "SEMANTIC_TIMESTAMP_OUT_OF_RANGE", "event_timestamp")
+
+    def test_health_check는_범위_밖이어도_제외(self, spark):
+        """health_check는 저장하지 않으므로 규칙을 적용하지 않는다."""
+        doc = json.loads(sample_bytes("valid_health_check.json"))
+        [r] = self.outcomes(spark, [dump({**doc, "event_timestamp": at(-dt.timedelta(hours=48))})])
+        assert r["outcome"] == "excluded" and r["error_code"] is None
+
+    def test_다른_불량_사유가_우선(self, spark, mutate):
+        """이미 DLQ인 주문은 원래 오류 코드를 유지한다."""
+        raw = mutate(lambda d: d.update(event_timestamp=at(-dt.timedelta(hours=48)))
+                     or d["properties"].update(total_amount=1))
+        [r] = self.outcomes(spark, [raw])
+        assert r["error_code"] == "SEMANTIC_AMOUNT_MISMATCH"
+
+    def test_DLQ_레코드_필드(self, spark, mutate):
+        """새 코드의 DLQ 메시지: 단계·코드·경로·이벤트 식별·사유·원문."""
+        ts = at(-dt.timedelta(hours=25))
+        raw = mutate(lambda d: d.update(event_timestamp=ts))
+        [row] = transforms.build_dlq_records(classify_batch(frame(spark, [raw], partition=1, start=9))).collect()
+        v = json.loads(row["value"])
+        assert row["key"] == f"{TOPIC}:1:9"
+        assert (v["error_stage"], v["error_code"], v["error_path"]) == (
+            "semantic", "SEMANTIC_TIMESTAMP_OUT_OF_RANGE", "event_timestamp")
+        assert (v["event_name"], v["schema_version"]) == ("order_completed", "1.0.0")
+        assert v["error_message"] == (f"event_timestamp {ts} is outside "
+                                      "[2026-11-15T06:08:02.000+00:00, 2026-11-16T06:13:02.000+00:00]")
+        assert base64.b64decode(v["raw_value_base64"]) == raw
+
 
 def test_CLASSIFICATION_SCHEMA_가_classify_키와_일치():
     """UDF 반환 스키마의 필드 이름이 classify() 결과 키와 같다."""
@@ -410,7 +494,7 @@ class TestLatency:
         timestamps = [TS - dt.timedelta(milliseconds=x) if x is not None else None
                       for x in (1000, 1000, 500, 0, -1, None)]
         source = spark.createDataFrame([tuple(r[:4]) + (ts, r[5]) for r, ts in zip(rows, timestamps)], INPUT_SCHEMA)
-        c = transforms.classify_batch(source).persist()
+        c = classify_batch(source).persist()
         try:
             counts, stats = monitoring.summarize_batch(c, TS.replace(tzinfo=dt.timezone.utc))
             assert counts == {"order": 2, "excluded": 1, "dlq": 3}
@@ -429,7 +513,7 @@ class TestLatency:
     @pytest.mark.parametrize("values", [[], [b"{"]])
     def test_끄면_지연_집계를_생략하고_건수는_같다(self, spark, values):
         """latency_enabled=False는 켬과 같은 분류 건수와 None 지연을 돌려준다."""
-        c = transforms.classify_batch(frame(spark, mixed_values() + values)).persist()
+        c = classify_batch(frame(spark, mixed_values() + values)).persist()
         try:
             started = TS.replace(tzinfo=dt.timezone.utc)
             on_counts, _ = monitoring.summarize_batch(c, started)
@@ -441,7 +525,7 @@ class TestLatency:
     @pytest.mark.parametrize("values", [[], [b"{"]])
     def test_유효시차가_없으면_null(self, spark, values):
         """빈 입력과 미래 timestamp만 있는 입력은 분위수에 가짜 0을 만들지 않는다."""
-        c = transforms.classify_batch(frame(spark, values))
+        c = classify_batch(frame(spark, values))
         counts, stats = monitoring.summarize_batch(c, (TS - dt.timedelta(seconds=1)).replace(tzinfo=dt.timezone.utc))
         assert sum(counts.values()) == len(values)
         assert stats["count"] == 0 and stats["future_timestamp_count"] == len(values)
@@ -455,7 +539,10 @@ def test_스트리밍_지연주입과_실행키_연결(spark, tmp_path, monkeypa
 
     input_dir = tmp_path / "input"
     input_dir.mkdir()
-    value = sample_bytes("valid_order_completed.json")
+    # 실제 시계로 콜백을 돌리므로 이벤트 시각을 현재로 바꿔 이벤트 시각 범위 안에 둔다.
+    now = dt.datetime.now(dt.timezone.utc)
+    value = dump({**json.loads(sample_bytes("valid_order_completed.json")),
+                  "event_timestamp": now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"})
     record = {"value": base64.b64encode(value).decode(), "topic": TOPIC, "partition": 0, "offset": 0,
               "timestamp": TS.isoformat(), "timestampType": 1}
     (input_dir / "one.json").write_text(json.dumps(record) + "\n")
@@ -521,7 +608,7 @@ def test_원본_JSON_전체_평탄화_값_보존(spark):
     """from_json과 select가 모든 원본 경로의 값·UTC 밀리초를 보존한다."""
     raw = sample_bytes("valid_order_completed.json")
     doc = json.loads(raw)
-    order = transforms.select_orders(transforms.classify_batch(frame(spark, [raw]))).first().asDict()
+    order = transforms.select_orders(classify_batch(frame(spark, [raw]))).first().asDict()
     for name, parts in ORDER_COLUMNS.items():
         value = doc
         for part in parts:
@@ -556,19 +643,21 @@ def test_원본_Spark_스키마가_계약_필드_타입과_대응한다():
     check(contract, schemas.ORDER_EVENT_SCHEMA)
 
 
-@pytest.mark.parametrize("timestamp,text,quantity", [
-    ("2028-02-29T23:59:59.999Z", "아이폰🍎", 2),
-    ("0001-01-01T00:00:00.000Z", "아이", 2),
-    ("9999-12-31T23:59:59.999Z", "iOS", (2**63 - 1) // 15000),
+@pytest.mark.parametrize("timestamp,text,quantity,shift", [
+    ("2028-02-29T23:59:59.999Z", "아이폰🍎", 2, dt.timedelta(0)),
+    ("0001-01-01T00:00:00.000Z", "아이", 2, dt.timedelta(hours=24)),
+    ("9999-12-31T23:59:59.999Z", "iOS", (2**63 - 1) // 15000, -dt.timedelta(minutes=5)),
 ])
-def test_Spark_변환_날짜_정수_유니코드_경계(spark, timestamp, text, quantity):
+def test_Spark_변환_날짜_정수_유니코드_경계(spark, timestamp, text, quantity, shift):
     """Python 검증을 통과한 날짜·거대 정수·유니코드가 Spark에서도 손실 없이 변환된다."""
     doc = json.loads(sample_bytes("valid_order_completed.json"))
     doc["event_timestamp"] = timestamp
     doc["context"]["device"]["os"] = text
     doc["properties"]["items"][0]["quantity"] = quantity
     doc["properties"].update(total_amount=15000 * quantity, discount_amount=0)
-    orders = transforms.select_orders(transforms.classify_batch(frame(spark, [dump(doc)])))
+    # 기준 시각을 이벤트 시각 근처로 둔다. shift는 datetime 범위(1~9999년)를 넘지 않게 범위 끝에 맞춘다.
+    event_time = dt.datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=dt.timezone.utc)
+    orders = transforms.select_orders(classify_batch(frame(spark, [dump(doc)]), event_time + shift))
     row = orders.select("os", "quantity", "total_amount",
                         F.date_format("event_timestamp", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").alias("time")).first()
     assert (row.os, row.quantity, row.total_amount, row.time) == (text, quantity, 15000 * quantity, timestamp)

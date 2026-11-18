@@ -81,7 +81,7 @@ health_check를 필터링하고 주문 필수 필드를 검증한다. 정상 주
 2. **JSON 파싱:** UTF-8 JSON 객체 1개를 입력으로 받는다. 잘못된 UTF-8, 빈 값, JSON 문법 오류는 파싱 실패로 분류하고, 객체가 아닌 유효 JSON은 스키마 위반으로 분류한다. 파서의 관대한 확장 문법으로 잘못된 JSON을 정상 수용하지 않는다.
 3. **계약 선택:** 지원 조합은 `order_completed` / `1.0.0`, `health_check` / `1.0.0`이다. 분류 필드 누락·타입 오류와 미지원 이벤트·버전은 불량으로 격리한다.
 4. **계약 검증:** 해당 JSON Schema의 필수값·원래 JSON 타입·null 금지·허용 필드·형식·enum·범위·배열 길이를 검증한다. 중첩 객체에도 `additionalProperties=false`를 적용한다. `pattern`은 JSON Schema 규정대로 ECMA-262 의미로 해석해 값 전체가 일치해야 하며, 끝에 개행이 붙은 값(예: `"usr_00001\n"`)은 거부한다. `event_name=health_check`라는 이유만으로 검증 없이 제외하지 않는다.
-5. **의미 검증:** 정상 주문 후보에는 데이터 계약의 금액 계산, 할인 상한, 상품 풀 일관성과 지역·도시 조합 규칙을 적용한다. 풀 기준과 배포 방식은 [3단계 구현 결정](#3단계-구현-결정)을 따른다.
+5. **의미 검증:** 정상 주문 후보에는 데이터 계약의 금액 계산, 할인 상한, 상품 풀 일관성과 지역·도시 조합 규칙을 적용한다. 풀 기준과 배포 방식은 [3단계 구현 결정](#3단계-구현-결정)을 따른다. 이와 별도로 저장 제약에서 온 [이벤트 시각 범위 규칙](#이벤트-시각-범위-규칙)을 적용한다.
 6. **변환·평탄화:** 검증을 통과한 주문만 아래 명시적 Spark 타입으로 변환한다. 변환 불가·표현 범위 초과는 변환 실패로 격리하고, 기본값 대입·절삭·반올림·대소문자 보정으로 오류를 숨기지 않는다.
 7. **출력 분류:** 정상 주문, 정상 health_check 제외, 불량 격리 중 하나로만 분류한다. 분류 자체는 입력 이벤트마다 한 번이며 출력 재시도의 중복 문제와 구분한다.
 
@@ -96,10 +96,20 @@ Spark 파싱 스키마는 명시적 `StructType`으로 정의하며 실행 데�
 | UTF-8·JSON 파싱 실패 | 불량 / 파싱 | 원문과 Kafka 위치를 보존해 DLQ 대상으로 전달 |
 | 필수값·타입·형식·허용값·배열 길이 위반 | 불량 / 스키마 검증 | 실패 경로와 사유를 보존해 DLQ 대상으로 전달 |
 | 미지원 이벤트·버전 | 불량 / 계약 선택 | 식별 가능한 이벤트·버전과 사유를 보존 |
-| 금액·상품·지역 의미 규칙 위반 | 불량 / 의미 검증 | 위반 규칙과 사유를 보존 |
+| 금액·상품·지역 의미 규칙 위반, 이벤트 시각 범위 밖 주문 | 불량 / 의미 검증 | 위반 규칙과 사유를 보존 |
 | timestamp·정수 변환 실패 또는 범위 초과 | 불량 / 타입 변환 | 원래 값과 실패 경로를 원문에서 추적 가능하게 보존 |
 
 실패 단계·필드 경로·사유를 식별할 수 있게 한다. DLQ 오류 코드와 메시지 스키마는 [3단계 구현 결정](#3단계-구현-결정)을 따른다. JDBC 연결 실패 등 인프라 장애는 이벤트 불량으로 분류하지 않는다.
+
+### 이벤트 시각 범위 규칙
+
+- 규칙: 정상 주문 후보의 `event_timestamp`가 `callback_started_at − 24시간 ≤ event_timestamp ≤ callback_started_at + 5분`(양 끝 포함)을 벗어나면 `semantic`/`SEMANTIC_TIMESTAMP_OUT_OF_RANGE`/경로 `event_timestamp`로 DLQ에 보낸다. 기준 시각 `callback_started_at`은 배치 콜백 진입 시각이며 같은 배치의 `spark_processed_at`·운영 지표와 같은 값이다.
+- 이유 1(독성 배치): `silver.order_events`는 `toStartOfHour(event_timestamp)` 파티션이고 ClickHouse는 INSERT 블록 1개가 파티션 100개를 넘으면 기본값(`max_partitions_per_insert_block=100`, `throw_on_max_partitions_per_insert_block=1`)으로 INSERT를 거부한다. 계약은 `event_timestamp` 형식만 검사하므로, 시각이 100시간 넘게 퍼진 배치는 같은 offset을 재시도할 때마다 실패해 뒤의 모든 배치를 막는다. 허용 구간은 24시간 5분이라 한 배치가 걸칠 수 있는 시간 파티션은 최대 26개다.
+- 이유 2(조용한 손실): TTL이 `event_timestamp + 24시간`이므로 하한보다 오래된 주문은 INSERT 시점에 이미 만료돼 다음 TTL 병합에서 사라진다. 적재 성공으로 세면서 데이터가 없어지는 대신 원문을 DLQ에 남긴다. 장애 후 24시간 넘은 backlog를 재처리하는 경우도 같다.
+- 경계값: 하한 24시간은 [ClickHouse TTL](04-clickhouse-storage.md#이벤트-식별과-테이블-기준)과 같은 값이다. 상한 5분은 생성기·Spark 시계 차이 허용분이다(로컬은 같은 호스트 시계). 환경 변수로 두지 않고 `transforms.EVENT_TIME_MAX_AGE`·`EVENT_TIME_MAX_AHEAD` 상수로 둔다. TTL을 바꾸면 `infra/clickhouse/schema.sql`과 이 상수를 함께 바꾼다(Spark 컨테이너에 `infra/`가 마운트되지 않아 자동 대조 테스트는 두지 않고 양쪽 주석으로 서로를 가리킨다).
+- 적용 위치: `classify()`는 시계를 쓰지 않는 순수 함수로 유지한다. `classify_batch(source, callback_started_at)`가 UDF 결과가 `order`인 행에만 이 규칙을 DataFrame 표현식으로 적용해 `result`를 DLQ로 덮어쓴다. `persist()`와 건수·지연 집계 전이므로 건수, 분류별 지연, 정상 적재, DLQ 쓰기가 같은 분류를 보며 `input = order + excluded + dlq`가 유지된다. 다른 불량 사유가 있으면 그 사유가 먼저 기록된다(오류 1건만 기록).
+- health_check는 적용하지 않는다. ClickHouse에 저장하지 않아 파티션·TTL 제약이 없으며 계속 제외로 센다.
+- 제약: 같은 offset을 재시도하면 기준 시각이 바뀌므로 경계 근처 주문은 시도마다 분류가 달라질 수 있다. 최소 한 번 쓰기 전제에서 허용한다.
 
 ### 학습 노트: `filter()`와 `select()`의 차이
 
@@ -330,6 +340,7 @@ Spark는 단일 컨테이너의 local 모드로 실행한다. 아래 값은 PRD 
 | semantic | `SEMANTIC_AMOUNT_MISMATCH` | `total_amount ≠ 상품 합계 − 할인` |
 | semantic | `SEMANTIC_PRODUCT_MISMATCH` | 상품 풀에 없는 ID 또는 이름·카테고리·가격 불일치 |
 | semantic | `SEMANTIC_LOCATION_MISMATCH` | 국가·지역·도시 조합이 지역 풀에 없음 |
+| semantic | `SEMANTIC_TIMESTAMP_OUT_OF_RANGE` (경로 `event_timestamp`) | 주문 `event_timestamp`가 [이벤트 시각 범위](#이벤트-시각-범위-규칙) `[콜백 진입 − 24시간, 콜백 진입 + 5분]` 밖 |
 | conversion | `CONVERSION_TIMESTAMP` | 형식 검사를 통과했으나 시각으로 변환 불가. 방어용이며 잘못된 날짜·윤초 `60`·연도 `0000`은 `SCHEMA_FORMAT`이 먼저 거부한다. |
 | conversion | `CONVERSION_LONG_RANGE` | 금액·가격·수량이 `LongType` 범위 초과 |
 

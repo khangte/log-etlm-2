@@ -3,7 +3,7 @@
 import functools
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import jsonschema_rs
@@ -12,7 +12,7 @@ from jsonschema.exceptions import ValidationError, best_match
 
 from log_generator.pools import LOCATIONS, PRODUCTS
 
-from pyspark.sql import DataFrame
+from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 
 from streaming import __version__
@@ -236,13 +236,37 @@ KAFKA_COLUMNS = ("kafka_topic", "kafka_partition", "kafka_offset", "kafka_append
 
 classify_udf = F.udf(classify, CLASSIFICATION_SCHEMA, useArrow=False)
 
+# 이벤트 시각 허용 범위(PRD 03 '이벤트 시각 범위 규칙'). 하한은 silver.order_events TTL과 같아야 한다.
+EVENT_TIME_MAX_AGE = timedelta(hours=24)
+EVENT_TIME_MAX_AHEAD = timedelta(minutes=5)
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-def classify_batch(source: DataFrame) -> DataFrame:
+
+def _event_time_window(result: Column, raw_value: Column, callback_started_at: datetime) -> Column:
+    """order 결과 중 event_timestamp가 허용 범위 밖이면 DLQ 결과로 바꾼 result 표현식을 반환한다."""
+    lower, upper = callback_started_at - EVENT_TIME_MAX_AGE, callback_started_at + EVENT_TIME_MAX_AHEAD
+    text = F.get_json_object(raw_value.cast("string"), "$.event_timestamp")
+    # order 행은 classify가 형식·변환 가능을 이미 확인했다. 다른 행에서 ANSI 파싱 오류가 나지 않게 try_를 쓴다.
+    event_time = F.try_to_timestamp(text, F.lit("yyyy-MM-dd'T'HH:mm:ss.SSSX"))
+    # F.lit(datetime)은 1582년 이전 시각을 율리우스력으로 바꿔 어긋나므로 epoch 마이크로초로 넘긴다.
+    lower_ts, upper_ts = (F.timestamp_micros(F.lit((t - _EPOCH) // timedelta(microseconds=1))) for t in (lower, upper))
+    out_of_range = (result["outcome"] == ORDER) & ~event_time.between(lower_ts, upper_ts)
+    window = f"[{lower.isoformat(timespec='milliseconds')}, {upper.isoformat(timespec='milliseconds')}]"
+    rejected = F.struct(
+        F.lit(DLQ).alias("outcome"), result["event_name"].alias("event_name"),
+        result["schema_version"].alias("schema_version"), F.lit("semantic").alias("error_stage"),
+        F.lit("SEMANTIC_TIMESTAMP_OUT_OF_RANGE").alias("error_code"), F.lit("event_timestamp").alias("error_path"),
+        F.concat(F.lit("event_timestamp "), text, F.lit(f" is outside {window}")).alias("error_message"))
+    return F.when(out_of_range, rejected).otherwise(result)
+
+
+def classify_batch(source: DataFrame, callback_started_at: datetime) -> DataFrame:
     """Kafka 소스 DataFrame에 원문·추적 컬럼과 분류 결과(result 구조체)를 붙인다.
 
     timestampType이 LogAppendTime이 아니면 이벤트 불량이 아닌 설정 오류이므로 raise_error로 작업을 실패시킨다.
+    callback_started_at(UTC aware)은 이벤트 시각 범위 규칙의 기준 시각이다. classify()는 시계를 쓰지 않는다.
     """
-    return source.select(
+    classified = source.select(
         F.col("value").alias("raw_value"),
         F.col("topic").alias("kafka_topic"),
         F.col("partition").alias("kafka_partition"),
@@ -254,6 +278,7 @@ def classify_batch(source: DataFrame) -> DataFrame:
         .alias("kafka_append_timestamp"),
         classify_udf(F.col("value")).alias("result"),
     )
+    return classified.withColumn("result", _event_time_window(F.col("result"), F.col("raw_value"), callback_started_at))
 
 
 def select_orders(classified: DataFrame) -> DataFrame:

@@ -26,6 +26,8 @@ JSON Schema로 표현하지 않으므로 별도 코드로 검증한다.
 3. 같은 `product_id`는 상품 풀과 이름·카테고리·가격이 일치한다.
 4. `region`·`city`는 지역 풀에 정의된 조합이다.
 
+Spark는 저장 제약 때문에 처리 시각 기준 이벤트 시각 범위도 검사한다(`SEMANTIC_TIMESTAMP_OUT_OF_RANGE`). 이벤트 자체의 계약이 아니므로 기준은 [Spark PRD](../docs/prd/03-stream-processing.md#이벤트-시각-범위-규칙)에서 정의한다.
+
 ## 표준 샘플
 
 `samples/`의 각 파일은 실제 출력과 같은 공백 없는 한 줄 직렬화 + LF다. 표의 크기는 LF를 뺀 페이로드 바이트 수다.

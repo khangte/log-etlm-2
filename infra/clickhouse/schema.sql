@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS silver.order_events
     ingested_at            DateTime64(3, 'UTC') DEFAULT now64(3)   CODEC(Delta, ZSTD(1))
 )
 ENGINE = ReplacingMergeTree()
+-- TTL 24시간은 Spark streaming.transforms.EVENT_TIME_MAX_AGE와 같아야 한다(PRD 03 '이벤트 시각 범위 규칙').
 PARTITION BY toStartOfHour(event_timestamp)
 ORDER BY (event_timestamp, event_id)
 TTL toDateTime(event_timestamp) + INTERVAL 24 HOUR
