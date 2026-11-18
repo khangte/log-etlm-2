@@ -16,7 +16,7 @@ from unittest.mock import patch
 from jsonschema import Draft202012Validator, FormatChecker
 
 from log_generator import pools
-from log_generator.config import Config, ConfigError, load_config
+from log_generator.config import ClickHouseConfig, Config, ConfigError, load_config
 from log_generator.generator import EventGenerator, serialize
 from log_generator.main import run
 
@@ -171,13 +171,15 @@ ENV_VALUES = {
     "PRODUCER_KAFKA_DELIVERY_TIMEOUT_MS": "30000",
     "PRODUCER_KAFKA_QUEUE_FULL_TIMEOUT_SEC": "30",
     "PRODUCER_KAFKA_FLUSH_TIMEOUT_SEC": "30",
+    "PRODUCER_CLICKHOUSE_HTTP_URL": "",
+    "CLICKHOUSE_GENERATOR_PASSWORD": "",
 }
 
 
 class ConfigTests(unittest.TestCase):
     def test_explicit_env_values(self):
         config = load_config(ENV_VALUES)
-        self.assertEqual(config, Config(5000, "stdout", None, 300000, 500, None, 1, None))
+        self.assertEqual(config, Config(5000, "stdout", None, 300000, 500, None, 1, None, None))
         config = load_config(ENV_VALUES | {"PRODUCER_EPS": "100", "PRODUCER_SEED": "-3",
                                           "PRODUCER_MAX_EVENTS": "0"})
         self.assertEqual((config.eps, config.seed, config.max_events), (100, -3, None))
@@ -188,7 +190,8 @@ class ConfigTests(unittest.TestCase):
             del env[key]
             with self.subTest(missing=key), self.assertRaisesRegex(ConfigError, key):
                 load_config(env)
-            if key not in ("PRODUCER_SEED", "PRODUCER_OUTPUT_PATH"):
+            if key not in ("PRODUCER_SEED", "PRODUCER_OUTPUT_PATH", "PRODUCER_CLICKHOUSE_HTTP_URL",
+                           "CLICKHOUSE_GENERATOR_PASSWORD"):
                 with self.subTest(empty=key), self.assertRaisesRegex(ConfigError, key):
                     load_config(ENV_VALUES | {key: " "})
         with self.assertRaises(ConfigError):
@@ -196,6 +199,16 @@ class ConfigTests(unittest.TestCase):
         # Config 자체에도 암묵적인 설정 기본값이 없다.
         with self.assertRaises(TypeError):
             Config()
+
+    def test_clickhouse_metrics_only_for_kafka_with_url_and_password(self):
+        kafka = ENV_VALUES | {"PRODUCER_OUTPUT": "kafka"}
+        self.assertIsNone(load_config(kafka).clickhouse)  # 빈 URL은 기록 끔
+        url = {"PRODUCER_CLICKHOUSE_HTTP_URL": "http://localhost:8123/"}
+        with self.assertRaisesRegex(ConfigError, "CLICKHOUSE_GENERATOR_PASSWORD"):
+            load_config(kafka | url)
+        config = load_config(kafka | url | {"CLICKHOUSE_GENERATOR_PASSWORD": "pw"})
+        self.assertEqual(config.clickhouse, ClickHouseConfig("http://localhost:8123", "pw"))
+        self.assertIsNone(load_config(ENV_VALUES | url).clickhouse)  # stdout 출력에는 Producer 지표가 없다.
 
     def test_loads_dotenv_independent_of_cwd_and_env_takes_precedence(self):
         with tempfile.TemporaryDirectory() as tmp:

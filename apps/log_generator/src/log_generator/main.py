@@ -11,6 +11,7 @@ import random
 import signal
 import sys
 import time
+import uuid
 from collections import Counter
 from typing import BinaryIO, Callable, TextIO
 
@@ -19,10 +20,12 @@ from confluent_kafka import KafkaException
 from log_generator import pools
 from log_generator.config import Config, ConfigError, load_config
 from log_generator.generator import EventGenerator
+from log_generator.ops_metrics import ProducerStatsWriter, producer_stats_row
 from log_generator.outputs.file import open_file
 from log_generator.outputs.kafka_producer import KafkaOutput
 
 TICK_SEC = 0.005  # 5ms마다 밀린 만큼만 출력해 1초 분량을 한꺼번에 내보내지 않는다.
+METRICS_INTERVAL_SEC = 1  # ops.producer_stats 구간 길이. PRD상 1초 고정
 
 
 class Stats:
@@ -103,10 +106,12 @@ def _log(err: TextIO, data: dict) -> None:
 
 
 def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | None = None,
-        stop_requested: Callable[[], bool] = lambda: False) -> tuple[Stats, str]:
+        stop_requested: Callable[[], bool] = lambda: False,
+        writer: ProducerStatsWriter | None = None) -> tuple[Stats, str]:
     """설정 속도로 이벤트를 out(또는 kafka)에 기록한다. (통계, 종료 상태)를 반환한다.
 
     kafka가 있으면 out은 쓰지 않는다. Stats의 건수는 큐 등록 기준이고 ACK 성공 건수는 kafka 지표에 있다.
+    writer가 있으면(kafka 출력 전용) 1초 구간 지표를 넘기고 종료 시 마지막 부분 구간까지 보낸 뒤 닫는다.
     """
     sink = kafka or out  # 둘 다 flush()를 제공하며 kafka의 flush는 실패·미전달 시 OSError를 낸다.
     generator = EventGenerator(random.Random(config.seed), pools.build_user_pool(config.user_pool_size))
@@ -117,6 +122,18 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
     next_tick = stats.start
     next_status = stats.start + config.status_interval_sec
     status = "completed"
+    run_id = uuid.uuid4().hex
+    serialize_us: Counter = Counter()  # 구간별 생성·직렬화 시간(us) 히스토그램
+    interval = {"wall": time.time(), "events": 0}  # 현재 구간 시작 wall 시각과 그때의 생성 건수
+    next_interval = stats.start + METRICS_INTERVAL_SEC
+
+    def emit_interval() -> None:
+        """현재 구간을 행으로 넘기고 다음 구간을 시작한다."""
+        nonlocal serialize_us
+        writer.submit(producer_stats_row(interval["wall"], run_id, config.eps,
+                                         stats.events - interval["events"], kafka.interval_metrics(), serialize_us))
+        serialize_us = Counter()
+        interval.update(wall=time.time(), events=stats.events)
 
     try:
         while config.max_events is None or stats.events < config.max_events:
@@ -144,12 +161,22 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
             for _ in range(due):
                 if stop_requested():
                     break
+                started_ns = time.perf_counter_ns()
                 event = generator.next_event()
+                serialize_us[(time.perf_counter_ns() - started_ns) // 1000] += 1
                 if kafka:
                     kafka.send(event.payload)
                 else:
                     out.write(event.payload + b"\n")
                 stats.record(event.kind, event.anomaly, len(event.payload))
+
+            if kafka:
+                kafka.sample_queue()
+            if writer and now >= next_interval:
+                emit_interval()
+                next_interval += METRICS_INTERVAL_SEC
+                if next_interval <= now:  # 루프가 멈췄던 구간은 하나로 합쳐 기록한다(행 수 = 실제 구간 수).
+                    next_interval = now + METRICS_INTERVAL_SEC
 
             if now >= next_status:
                 _log(err, stats.progress() | ({"kafka": kafka.metrics()} if kafka else {}))
@@ -172,7 +199,11 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
         stats.output_errors += 1
         status = "output_error"
         _log(err, {"error": f"output write failed: {exc}"})
-    _log(err, stats.snapshot(status) | ({"kafka": kafka.metrics(detail=True)} if kafka else {}))
+    if writer:  # flush까지 끝난 마지막 부분 구간을 보낸다.
+        emit_interval()
+        writer.close()
+    _log(err, stats.snapshot(status) | ({"kafka": kafka.metrics(detail=True)} if kafka else {})
+         | ({"producer_stats": {"run_id": run_id, "failed_rows": writer.failed_rows}} if writer else {}))
     return stats, status
 
 
@@ -184,7 +215,7 @@ def main() -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
 
-    kafka = None
+    kafka = writer = None
     if config.output == "kafka":
         out = None
         try:
@@ -192,6 +223,8 @@ def main() -> int:
         except KafkaException as exc:  # 클라이언트 설정값을 librdkafka가 거부한 경우
             print(f"cannot create kafka producer: {exc}", file=sys.stderr)
             return 2
+        if config.clickhouse:
+            writer = ProducerStatsWriter(config.clickhouse, sys.stderr)
     elif config.output == "file":
         try:
             out = open_file(config.output_path)
@@ -210,7 +243,7 @@ def main() -> int:
 
     previous_handler = signal.signal(signal.SIGINT, request_stop)
     try:
-        _, status = run(config, out, sys.stderr, kafka, lambda: interrupted)
+        _, status = run(config, out, sys.stderr, kafka, lambda: interrupted, writer)
     finally:
         signal.signal(signal.SIGINT, previous_handler)
     if config.output == "file":

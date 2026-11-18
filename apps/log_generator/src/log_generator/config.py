@@ -39,6 +39,14 @@ class KafkaConfig:
 
 
 @dataclass(frozen=True)
+class ClickHouseConfig:
+    """ops.producer_stats 기록용 HTTP 접속 정보. 계정 이름은 init.sh에 고정된 generator_writer다."""
+
+    http_url: str
+    password: str
+
+
+@dataclass(frozen=True)
 class Config:
     eps: int
     output: str
@@ -48,6 +56,7 @@ class Config:
     seed: int | None
     status_interval_sec: int
     kafka: KafkaConfig | None  # output이 kafka일 때만 값이 있다.
+    clickhouse: ClickHouseConfig | None  # kafka 출력이고 URL이 있을 때만 생성기 지표를 기록한다.
 
 
 def _value(environ: Mapping[str, str | None], key: str, *, allow_empty: bool = False) -> str:
@@ -114,6 +123,15 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
     if output == "kafka" and compression not in COMPRESSIONS:
         raise ConfigError(f"PRODUCER_KAFKA_COMPRESSION must be one of {COMPRESSIONS}: {compression!r}")
 
+    # 빈 URL은 생성기 지표 기록 끔을 명시적으로 뜻한다. URL이 있으면 비밀번호가 필요하다.
+    clickhouse_url = _value(env, "PRODUCER_CLICKHOUSE_HTTP_URL", allow_empty=True).rstrip("/")
+    clickhouse_password = _value(env, "CLICKHOUSE_GENERATOR_PASSWORD", allow_empty=True)
+    clickhouse = None
+    if output == "kafka" and clickhouse_url:
+        if not clickhouse_password:
+            raise ConfigError("CLICKHOUSE_GENERATOR_PASSWORD is required when PRODUCER_CLICKHOUSE_HTTP_URL is set")
+        clickhouse = ClickHouseConfig(clickhouse_url, clickhouse_password)
+
     # 빈 seed는 무작위를, 최대 건수 0은 무제한을 명시적으로 뜻한다.
     seed = _value(env, "PRODUCER_SEED", allow_empty=True)
     return Config(
@@ -125,4 +143,5 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         seed=_int(env, "PRODUCER_SEED", minimum=None) if seed else None,
         status_interval_sec=_int(env, "PRODUCER_STATUS_INTERVAL_SEC", minimum=1),
         kafka=kafka if output == "kafka" else None,
+        clickhouse=clickhouse,
     )

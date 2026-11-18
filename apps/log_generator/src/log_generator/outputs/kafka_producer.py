@@ -65,6 +65,11 @@ class KafkaOutput:
         self.append_delay_ms: Counter = Counter()  # 생성 -> Kafka(LogAppendTime) 지연(ms 정수). 음수 포함
         self.delay_unparseable = 0  # event_timestamp를 읽을 수 없어 지연 계산 불가
         self.delay_not_append_time = 0  # 콜백 timestamp 종류가 LogAppendTime이 아님
+        # ops.producer_stats 1초 구간 집계. interval_metrics()가 읽고 비운다.
+        self._interval_ack_latency_ms: Counter = Counter()
+        self._interval_append_delay_ms: Counter = Counter()
+        self._interval_queue_max = 0
+        self._interval_base = (0, 0)  # 직전 구간 종료 시점의 (acked, failed)
         self._abort: str | None = None
         self._last_status = (self.start, 0)
         self._producer = producer_factory({
@@ -86,7 +91,9 @@ class KafkaOutput:
     def _on_delivery(self, error: KafkaError | None, msg) -> None:
         latency = msg.latency()
         if latency is not None:
-            self.ack_latency_ms[round(latency * 1000, 1)] += 1
+            rounded = round(latency * 1000, 1)
+            self.ack_latency_ms[rounded] += 1
+            self._interval_ack_latency_ms[rounded] += 1
         if error is not None:
             self.failed += 1
             self._abort = self._abort or f"delivery failed: {error}"
@@ -101,6 +108,7 @@ class KafkaOutput:
             self.delay_unparseable += 1
         else:
             self.append_delay_ms[ts - event_ms] += 1
+            self._interval_append_delay_ms[ts - event_ms] += 1
 
     def _on_error(self, error: KafkaError) -> None:
         # 브로커 단절·fatal 오류는 개별 메시지가 아닌 이 콜백으로만 전달된다.
@@ -151,6 +159,26 @@ class KafkaOutput:
         undelivered = self.undelivered
         if undelivered:
             raise KafkaOutputError(f"{undelivered} messages undelivered after flush")
+
+    def sample_queue(self) -> None:
+        """현재 로컬 큐 길이로 구간 최댓값을 갱신한다. 생성 루프가 틱마다 호출한다."""
+        self._interval_queue_max = max(self._interval_queue_max, len(self._producer))
+
+    def interval_metrics(self) -> dict:
+        """직전 호출 이후 구간의 건수·큐 최댓값·지연 히스토그램을 돌려주고 구간 집계를 비운다."""
+        base_acked, base_failed = self._interval_base
+        self._interval_base = (self.acked, self.failed)
+        result = {
+            "acked": self.acked - base_acked,
+            "failed": self.failed - base_failed,
+            "undelivered": self.undelivered,  # 구간 종료 시점 값
+            "queue_len_max": max(self._interval_queue_max, len(self._producer)),
+            "ack_latency_ms": self._interval_ack_latency_ms,
+            "gen_to_kafka_ms": self._interval_append_delay_ms,
+        }
+        self._interval_ack_latency_ms, self._interval_append_delay_ms = Counter(), Counter()
+        self._interval_queue_max = 0
+        return result
 
     @property
     def undelivered(self) -> int:
