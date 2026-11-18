@@ -1,6 +1,6 @@
 # ClickHouse 적재
 
-- 상태: 초안
+- 상태: 구현 중 (ClickHouse 서비스·스키마·계정, Spark JDBC 적재, Spark·생성기 운영 지표 기록 구현·1차 검증, 5,000 EPS 지속 부하·장애 주입 측정 완료. 남은 항목은 [측정 후 남은 작업](#측정-후-남은-작업-2026-11-18))
 - 적용 범위: 제품 v1
 
 ## 목표
@@ -92,6 +92,7 @@ Spark 변환 구현 전에 조회 요구사항을 바탕으로 한 행의 의미
   - `DoubleDelta`: 간격이 일정한 시계열에 적합하다. 주문 이벤트 시각은 간격이 일정하지 않으므로 `Delta`를 쓴다.
   - 파티션을 잘게 나눠 초과 보관 줄이기: 1시간 파티션의 초과 보관은 최대 1시간분(약 4%)이다. 파티션을 더 나누면 part가 늘고 압축률이 떨어져 이득이 거의 없다.
 - 검증: 4단계에서 같은 데이터로 `system.columns`의 `data_compressed_bytes`·`data_uncompressed_bytes`를 LZ4와 비교한다. 압축률이 낮거나 병합 CPU가 예산을 넘는 컬럼은 코덱을 조정하고 결과를 이 절에 기록한다.
+- 결과 (2026-11-18): 같은 3,060,098행에서 코덱 적용 198.3MB, 기본 LZ4 396.0MB로 절반이다(압축 전 905.9MB, 압축률 4.57:1 대 2.29:1). 행당 디스크 64.8바이트로 가정(30~60바이트)보다 약간 크며, 하루 3.67억 행이면 약 23.8GB다. 무작위 ID 문자열 3개(`event_id`·`order_id`·`session_id`)가 압축 후 크기의 83%다. 상세는 [지속 부하 측정 결과](#지속-부하-측정-결과-2026-11-18)를 따른다.
 
 ## 실행 구성
 
@@ -388,6 +389,11 @@ B의 제약은 불변 전제 의존이다. 같은 ID에 다른 `event_timestamp`
     | ClickHouse INSERT·병합 | 서버 측 INSERT 처리시간, part 생성·병합 | - | `system.query_log`, `system.part_log` |
 
     - 판정 순서: ACK EPS가 목표보다 낮고 Producer 큐가 늘면 생성기·Producer 구간이다. offset backlog가 계속 늘면 Spark 이후 구간이며, 배치 시간 내역으로 분류와 쓰기를 가른다. JDBC 쓰기 action은 길고 `query_log`의 INSERT 시간은 짧으면 Spark 태스크·네트워크, 둘 다 길면 ClickHouse 쪽이다.
+    - 실측으로 확인한 해석 제약(2026-11-18, [장애 주입 측정 결과](#장애-주입-측정-결과-2026-11-18)):
+      - offset backlog(`latest_offsets − end_offsets`)는 배치 계획 시점 값이라 `maxOffsetsPerTrigger` 상한에 걸리지 않으면 0이다. 처리가 약간 느려진 상태는 backlog가 아닌 배치 입력 건수 증가, 트리거 시간 5초 초과, Kafka → 콜백 p95 증가로 드러난다. 대시보드는 backlog만으로 정상 판정하지 않는다.
+      - 재시작 후 첫 진행 정보는 `latest_offsets`가 빈 Map이다. 이 행의 backlog는 음수가 되므로 빈 Map이면 측정 불가로 표시한다.
+      - 권한·인증 오류 INSERT는 `query_log`에 `ExceptionBeforeStart`, `tables`가 빈 배열로 남는다. INSERT 실패 패널은 `tables`가 아닌 `user = 'spark_writer'`와 `exception_code != 0`으로 거른다.
+      - 실패한 INSERT의 `written_rows`는 실제로 남은 행 수가 아니다. 실패한 쓰기가 남긴 중복은 `silver.order_events`의 물리 행 수와 고유 `event_id` 수 차이로 센다.
   - 컬럼은 아래로 정한다. 시각은 `DateTime64(3, 'UTC')`, 분위수는 `Float64`, 건수는 `UInt64`다. 측정 대상이 없는 구간·배치의 분위수는 Nullable 대신 건수 0으로 구분하고 분위수 값은 0으로 둔다. 대시보드는 건수 0이면 측정 불가로 표시한다.
     - `ops.producer_stats`: `interval_start`, `run_id`, `target_eps`, `generated`, `acked`, `failed`, `undelivered`, `queue_len_max`, 그리고 `ack_latency_ms`·`gen_to_kafka_ms`·`gen_serialize_us` 각각의 `_p50`·`_p95`·`_p99`·`_count`. `ORDER BY interval_start`.
     - `ops.spark_batch_attempts`: `query_id`, `run_id`, `batch_id`, `callback_started_at`, `status`, `failed_stage`, `input_rows`, `order_rows`, `excluded_rows`, `dlq_rows`, `classification_ms`, `orders_write_ms`, `dlq_write_ms`, `callback_total_ms`, `kafka_to_callback_ms`의 `_p50`·`_p95`·`_p99`·`_max`·`_count`, `kafka_ts_missing_count`, `kafka_ts_future_count`. `ORDER BY callback_started_at`.
@@ -421,11 +427,135 @@ JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한�
 - 비교한 대안: 4단계에 포함하면 완료 기준의 조회 가능 지연을 실측할 수 있지만 위 비용이 든다. `ingested_at - event_timestamp`는 적재 시각을 조회 가능 시각으로 간주하지 않는다는 원칙에 따라 조회 가능 지연으로 표시하지 않는다.
 - 제약: 대시보드는 생성 → 조회 가능 지연을 표시하지 않는다. 데이터 최신성(현재 시각 − 최신 `event_timestamp`)은 [Grafana PRD](05-grafana-dashboard.md#처리지연-측정과-표시)대로 표시하며 이벤트별 지연과 구분한다. 필요해지면 이 절을 갱신하고 샘플러를 추가한다.
 
+## 구현 기록
+
+### 1차 구현 검증 (2026-11-17)
+
+- 범위: `infra/clickhouse/`(스키마·계정·저메모리 설정), Compose `clickhouse`·`clickhouse-init`, Spark JDBC 적재(`streaming.sinks.write_orders`), Spark 운영 지표(`streaming.ops_metrics`). 생성기 `ops.producer_stats` 기록은 아직 구현하지 않았다.
+- 스키마·계정: `clickhouse-init`을 두 번 실행해 같은 결과로 끝나는 것을 확인했다. `grafana_reader`는 `gold` 뷰 조회만 되고 `silver` 조회와 `DROP`은 `ACCESS_DENIED`, `spark_writer`는 `gold` 조회가 `ACCESS_DENIED`, `gold_definer`는 로그인 불가다. DEFINER 뷰는 26.8에서 그대로 동작했다.
+- 자원: `max_server_memory_usage`는 3,865,470,566바이트로 컨테이너 4g의 90%다. 컨테이너 제한을 반영한다. `part_log`는 첫 INSERT 후 생성됐고 `metric_log` 등 4개 로그 테이블은 만들어지지 않았다.
+- 적재: 별도 체크포인트·`latest`로 Spark를 띄우고 생성기 150,000건(5,000 EPS, 30초)을 보냈다. 정상 주문 127,355건이 생성기 `normal_order` 건수와 같았고 `event_id` 고유 수도 127,355다. 시각 컬럼은 UTC 값 그대로 저장됐다(`event_timestamp` 12:28:13.694, `kafka_append_timestamp` 12:28:14.358, KST 21:28).
+- INSERT 수: 정상 주문이 있는 배치 4개에서 `spark_writer` INSERT 10회, `written_rows` 합 127,355, 회당 5,514~14,269행이다. 4개 배치 × 쓰기 파티션 3개의 상한 12회 이하이고 회당 행 수가 `batchsize` 50,000보다 작아, 한 파티션이 INSERT 2회로 나뉜 경우는 없다. 배치별 INSERT 수는 따로 집계하지 않았다.
+- 운영 지표: 배치 6개(실패 1개 포함) 모두 `ops.spark_batch_attempts`에 기록됐다. 기존 체크포인트의 offset이 Kafka 보관 기간을 지나 실패한 시도도 `status=failed`, `failed_stage=classification_and_metrics_action`으로 남았다. `ops.spark_query_progress`의 offset Map과 backlog 계산(`latest − end`)이 동작했다.
+- 관찰: 기동 직후 배치는 트리거 시간 4.8~11.3초로 5초를 넘었고 정상 쓰기 action은 2.1~5.4초였다. warmup·backlog 배치라 지속 부하 판단에 쓰지 않는다. 지속 부하 측정에서 다시 본다.
+- 테스트: Spark 컨테이너 pytest 319개 통과(JDBC·지표 INSERT는 대체).
+
+### 생성기 지표 구현 검증 (2026-11-18)
+
+- 범위: `log_generator.ops_metrics`(행 변환·전송 스레드), `KafkaOutput.interval_metrics`(구간 건수·큐 최댓값·지연 히스토그램), `main.run`의 1초 구간 집계. 설정 `PRODUCER_CLICKHOUSE_HTTP_URL`(빈 값이면 기록 끔), 비밀번호는 `CLICKHOUSE_GENERATOR_PASSWORD`를 쓴다.
+- 방식: INSERT는 백그라운드 스레드가 쌓인 행을 묶어 보낸다. `wait_for_async_insert=1`의 응답 대기가 생성 루프의 속도 조절을 막지 않게 하기 위해서다. 종료 시 flush 후 마지막 부분 구간을 보내고 최대 10초 기다린다. 생성 루프가 1초 넘게 멈췄던 구간은 한 행으로 합친다.
+- 생성·직렬화 시간은 `EventGenerator.next_event()` 호출 시간(us)이다. 생성 → Kafka 지연은 `event_timestamp`를 읽을 수 있는 이벤트만 집계하므로 `gen_to_kafka_ms_count`가 `acked`보다 작다.
+- 실측: Kafka·ClickHouse만 띄우고 25,000건(5,000 EPS)을 보냈다. 6행이 기록됐고 `generated`·`acked` 합이 각각 25,000으로 최종 통계와 같았다. 첫 구간은 `acked` 0, `queue_len_max` 5,001이고 둘째 구간 ACK p99가 1,092.7ms였다. 브로커 연결 준비 동안 큐에 쌓였다가 다음 구간에 ACK된 것으로, 기동 직후 구간은 지속 부하 판단에서 제외한다. 이후 구간 ACK p99는 8~43ms, 직렬화 p99는 129~185us다.
+- 테스트: 생성기 pytest 41개 통과(스키마 컬럼 일치, 구간 합계, HTTP 요청 형식, 실패 시 경고만 남김).
+
+### 지속 부하·장애 주입 측정 계획 (2026-11-18)
+
+두 측정은 서로의 지표를 오염시키므로 별도 실행으로 나눈다. 지속 부하(기준선)를 먼저 하고 장애 주입을 뒤에 한다. 공통 조건은 다음과 같다.
+
+- 생성기 5,000 EPS, Kafka UI 끔, 자원·설정은 `.env`·Compose 기본값 그대로다. 코드·설정은 측정 중 바꾸지 않는다.
+- 실행마다 별도 체크포인트와 `startingOffsets=latest`를 쓴다. 초기 offset 저장(`sources/0/0`)을 확인한 뒤 입력을 시작한다. 토픽·기존 체크포인트·기존 행은 지우지 않는다.
+- 실행의 행은 `spark_query_id`(체크포인트마다 고정, 재시작해도 같음)로 구분한다. 생성기 지표는 `run_id`로 구분한다.
+- 원시 로그와 스크립트는 세션 임시 디렉터리에 두고, 요약 JSON은 `docs/measurements/`에 남긴다.
+
+#### 지속 부하 (기준선)
+
+- 입력 720초(워밍업 120초 + 본 측정 600초), 입력 중단 후 최대 180초 동안 backlog가 0이 되는지 본다. 3단계 [지속 부하 측정](03-stream-processing.md#지속-부하-측정-계획-2026-11-17)과 같은 길이다.
+- 측정 항목:
+  - 처리량·backlog: 본 측정 구간 ACK EPS(`ops.producer_stats`), 배치 시간 내역(`ops.spark_batch_attempts`), backlog 추이(`ops.spark_query_progress`).
+  - INSERT: `system.query_log`의 `spark_writer` INSERT 횟수·`query_duration_ms`·`written_rows`.
+  - part·병합: 10초마다 활성 part 수(`system.parts`), `system.part_log`의 `NewPart`·`MergeParts` 건수·병합 시간. `parts_to_delay_insert`(기본 1000) 대비 여유를 본다.
+  - `FINAL` 조회 비용: 본 측정 중 30초마다 `grafana_reader`로 `gold.orders_deduplicated` 15분·5분 범위 집계를, 관리자로 `silver.order_events` 15분 범위 집계(`FINAL` 없음)를 실행한다. `query_log`의 `query_duration_ms`·`read_rows`·`memory_usage`를 비교한다. 5분·15분 `read_rows` 비율로 범위 조건이 정렬 키 가지치기에 쓰이는지 확인한다.
+  - 압축률: 이번 실행 행을 코덱 그대로인 임시 테이블과 코덱을 뺀(기본 LZ4) 임시 테이블에 각각 복사하고 `OPTIMIZE FINAL` 후 `system.columns`의 압축 전·후 바이트를 비교한다. 같은 데이터·같은 part 상태에서 비교하기 위해서다. 임시 테이블은 비교 후 지운다.
+  - 자원: 5초마다 `docker stats`로 ClickHouse·Spark·Kafka CPU·메모리.
+- 판정: ACK EPS 4,750 이상, 쿼리 실패 없음, 본 측정 후반 backlog가 계속 늘지 않음, 입력 중단 후 180초 안에 backlog 0. 고유 `event_id` 수 = 생성기 `normal_order` 건수. `FINAL` 조회 시간 목표는 이 측정 결과로 정해 [완료 기준](#완료-기준)에 기록한다.
+
+#### 장애 주입
+
+한 실행 안에서 순서대로 주입하고, 주입 사이에 기준 수준으로 회복하는지 본다. 주입은 모두 관리자 계정의 DDL·권한 변경이며 코드는 바꾸지 않는다. 생성기는 계속 5,000 EPS로 보낸다.
+
+| 순서 | 장애 | 주입 방법 | 되돌림 | 기대 지표 |
+| --- | --- | --- | --- | --- |
+| 1 | 쓰기 지연 | `silver.order_events`에 `sleep(3)`을 실행하는 materialized view(대상 `Null` 테이블)를 60초 붙인다. INSERT마다 서버 처리시간이 3초 늘고 행은 저장된다 | view 삭제 | `orders_write_ms`와 `query_log` INSERT 시간이 함께 늘어 ClickHouse 구간으로 판별된다. 트리거가 5초를 넘으면 backlog가 늘고, 생성기 ACK 지연·큐는 변하지 않는다 |
+| 2 | 적재 실패(저장 후 오류) | `throwIf(1)`을 실행하는 materialized view를 붙인다. 원본 행은 저장된 뒤 클라이언트는 오류를 받는다. 서버 저장 후 응답 실패와 같은 상태다 | 쿼리 실패 확인 후 view 삭제, 같은 체크포인트로 재시작 | 실패 시도가 `status=failed`, `failed_stage=orders_write_action`으로 남는다. `query_log`는 `written_rows`가 있는 예외다. 재시작 후 같은 `batch_id`가 다시 실행돼 물리 중복이 생기고 `FINAL` 뷰는 한 번만 센다. 중단 동안 backlog가 늘고 회복한다 |
+| 3 | 적재 실패(저장 전 거부) | `spark_writer`의 `silver.order_events` INSERT 권한을 회수한다 | 실패 확인 후 권한 재부여, 같은 체크포인트로 재시작 | 2와 같은 실패 시도 기록, `query_log`는 `ACCESS_DENIED`·`written_rows` 0이다. 물리 중복이 생기지 않는다 |
+
+- 구간(생성기 경과 기준): 워밍업 0~120초, 기준 120~240초, 지연 주입 240~300초, 회복 300~420초, 저장 후 오류 420초부터 재시작·회복까지, 회복 후 저장 전 거부, 재시작·회복 후 입력 중단. 입력은 900초다.
+- 최종 대조: 고유 `event_id` 수 = 생성기 `normal_order` 건수(누락 없음). 물리 행 수 − 고유 수 = 2번에서 다시 실행된 배치의 정상 건수. `FINAL` 뷰의 실행 구간 집계 = 고유 수.
+- 판정: 각 장애에서 위 기대 지표만으로 원인 구간(생성기·Producer / Spark / ClickHouse INSERT / 권한·연결)을 가를 수 있는지, 누락·이중 합산이 없는지 확인한다.
+- 제외: 같은 ID에 다른 `event_timestamp`를 넣는 충돌 점검과 Spark 측 처리 지연(CPU 제한)은 이번 측정에 포함하지 않는다. Spark 처리 지연의 지표 구분은 [3단계 지연 주입](03-stream-processing.md#2-소비-지연처리-지연-주입)에서 확인했다.
+
+### 지속 부하 측정 결과 (2026-11-18)
+
+**판정: 통과.** 5,000 EPS 목표 입력을 ClickHouse 적재까지 backlog 없이 처리했고, 누락·중복이 없었다.
+
+- 실행: 09:56:31~10:08:01 KST(실제 경과 690.6초), 체크포인트 `/opt/spark/checkpoints/ch-load-20261118`, 컨테이너 `log-etlm-2-spark-chload-20261118-a`. 근거: [측정 JSON](../measurements/2026-11-18-clickhouse-sustained-load.json).
+- 시계 주의: WSL 단조 시계가 Windows 시계보다 약 4.3% 빠르다(60초 비교: Windows 57.94초, 단조 60.46초). realtime은 약 29초마다 1.3초씩 뒤로 보정된다(`Time jumped backwards`). 생성기는 단조 시계로 속도를 맞추므로 실제 입력은 **약 5,213 EPS**(목표보다 약 4% 많음)이고, 측정한 ms 값도 같은 비율로 크다. 구간은 실제 경과 기준으로 나눴다(워밍업 0~114.9초, 본 측정 114.9~690.6초). 3단계 측정도 같은 영향을 받았을 수 있다.
+
+| 항목 | 결과 (본 측정) |
+| --- | --- |
+| 생성기 | 3,600,000건 ACK, 실패·미전달 0, exit 0. 실제 ACK EPS 5,216. 구간별 ACK p99는 p50 8.5ms, 최대 89.7ms. 큐 최대 438 |
+| Spark 배치 | 115개 모두 성공. 콜백 p50 2.49초, p95 3.12초, 최대 4.63초. 트리거 5초 초과 0. 분류 p50 1.23초, 정상 쓰기 p50 1.09초(p95 1.47초), DLQ 쓰기 p50 0.16초 |
+| backlog·대기 | backlog 최대 0. Kafka → 콜백 배치별 p95는 p50 4.79초, 최대 5.76초. 전반·후반 차이 없음. 입력 중단 후 약 5초에 마지막 배치 처리 |
+| INSERT (`query_log`) | 345회, 회당 약 7,400행(최대 9,114). 서버 처리 p50 161ms, p95 255ms, 최대 561ms. 오류 0 |
+| part·병합 | 활성 part 최대 24개, 파티션당 최대 11개(`parts_to_delay_insert` 1,000 대비 여유 큼). 실행 중 `NewPart` 398, `MergeParts` 72회(평균 429ms, p95 1.04초, 최대 3.95초) |
+| 건수 대조 | 물리 행 = 고유 `event_id` = `FINAL` 뷰 = 생성기 `normal_order` = **3,060,098**. 같은 시간 범위의 다른 실행 행 0 |
+| 자원 (`docker stats` 5초 표본) | ClickHouse CPU 평균 24%, p95 77%, 최대 173%(제한 200%), 메모리 최대 611MiB/4GiB. Spark CPU 평균 144%, 최대 311%, 메모리 최대 2.07GiB/3GiB. Kafka CPU 평균 27%, 메모리 최대 871MiB |
+
+`FINAL` 조회 비용 (30초마다 20회, 실행 길이가 15분보다 짧아 15분 범위는 그때까지의 전체 행을 읽었다):
+
+| 조회 | 서버 시간 p50 / p95·최대 | 읽은 행 p50 (최대) | 메모리 p50 |
+| --- | --- | --- | --- |
+| `gold.orders_deduplicated` 15분 (`grafana_reader`) | 64ms / 336ms | 1,765,594 (3,051,621) | 21.3MB |
+| `gold.orders_deduplicated` 5분 | 57ms / 99ms | 1,316,088 (1,336,564) | 17.6MB |
+| `silver.order_events` 15분, `FINAL` 없음 | 17ms / 66ms | 1,765,594 (3,051,621) | 5.5MB |
+
+- 범위 가지치기: 5분 조회가 읽은 행은 5분 분량(약 133만 행)에서 멈추고 15분 조회는 누적에 따라 늘었다. 뷰를 거친 조회에서도 `event_timestamp` 범위 조건이 정렬 키 가지치기에 쓰인다.
+- `FINAL` 비용: 같은 행을 읽을 때 `FINAL`이 없는 조회보다 약 3.8배 느리고 메모리는 약 4배다. 그래도 15분 범위 p95가 1초보다 충분히 작으므로 [조합 D(롤업)](#중복-제거조회-조합-비교)는 도입하지 않는다.
+- 압축: [압축 코덱](#압축-코덱)의 결과를 따른다. 이번 실행 행을 복사한 임시 테이블 2개를 `OPTIMIZE FINAL` 후 비교했고 비교 후 지웠다.
+
+### 장애 주입 측정 결과 (2026-11-18)
+
+**판정: 통과.** 세 장애 모두 지표만으로 원인 구간을 가를 수 있었고, 누락·이중 합산이 없었다. 기대와 다른 점 3개는 [판정 순서](#운영-지표-저장)의 해석 제약에 반영했다.
+
+- 실행: 10:10:59~10:25:27 KST(실제 경과 867.7초, 실제 입력 약 5,186 EPS), 체크포인트 `/opt/spark/checkpoints/ch-fault-20261118`, 컨테이너 a(시작)·b(저장 후 오류 뒤)·c(저장 전 거부 뒤). 주입은 모두 되돌렸고 `default` 데이터베이스에 남은 객체가 없으며 `spark_writer` 권한이 원래대로인 것을 확인했다. 근거: [측정 JSON](../measurements/2026-11-18-clickhouse-fault-injection.json).
+
+| 구간 (실제 경과) | 정상 쓰기 p50 | INSERT 서버 p50 | 분류 p50 | 트리거 > 5초 | Kafka → 콜백 p95 최대 | 생성기 ACK p99 최대 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 기준 120~240초 | 1,128ms | 151ms | 1,201ms | 0/24 | 5.64초 | 51ms |
+| 쓰기 지연 240~300초 | **4,214ms** | **3,192ms** | 1,458ms | **9/11** | 5.93초 | 49ms |
+| 회복 300~420초 | 1,104ms | 166ms | 1,229ms | 0/24 | 4.80초 | 26ms |
+
+- 쓰기 지연: 정상 쓰기와 서버 INSERT 시간이 함께 약 3초 늘고 분류·생성기 지표는 그대로여서 ClickHouse INSERT 구간으로 판별된다. 트리거가 5초를 넘으면서 배치 입력이 약 25,000 → 29,400건으로 늘었다. **backlog는 0으로 남았다**(상한 50,000 미만이라 계획 시점 `latest = end`). 되돌린 뒤 첫 구간부터 기준으로 돌아왔다.
+- 저장 후 오류(420초 주입): 약 3초 뒤 batch 84의 INSERT 3개가 `ExceptionWhileProcessing`(code 395)로 실패하고, 시도 행에 `status=failed`, `failed_stage=orders_write_action`이 남았다. 6.2초 뒤 쿼리가 exit 1로 끝났다. 재시작(b) 후 batch 84가 같은 입력 30,176건으로 다시 실행돼 성공했다. 재시작 첫 배치는 Kafka → 콜백 p95 19.5초, 다음 배치들은 상한 50,000건으로 backlog 최대 87,402를 처리했고 주입 약 61초 뒤 기준으로 돌아왔다.
+  - 실패한 INSERT 3개의 `written_rows`는 8,573·8,562·8,512였지만 실제로 남은 것은 1개(8,573행)뿐이었다. 원본 저장과 view 실행 순서에 따라 저장 여부가 달라진다. 재실행이 25,647행을 다시 넣어 **물리 중복 8,573행**이 생겼다.
+- 저장 전 거부(600초 주입): batch 115의 INSERT 3개가 `ExceptionBeforeStart`(code 497 `Not enough privileges`, `written_rows` 0, `tables` 빈 배열)로 실패했다. 시도 행은 저장 후 오류와 같이 `orders_write_action`이고, 4.4초 뒤 쿼리가 종료됐다. 재시작(c) 후 batch 115가 다시 실행됐고 중복은 없었다. 회복은 주입 약 53초 뒤다.
+- 두 실패는 Spark 시도 행만으로는 같아 보인다. `query_log`의 예외 유형(`ExceptionWhileProcessing` 대 `ExceptionBeforeStart`)과 코드로 ClickHouse 처리 중 오류인지 권한·연결 거부인지를 가른다. 세 장애 동안 생성기 ACK 지연·큐는 기준과 같아 생성기·Producer 구간은 원인에서 제외된다.
+- 재시작 후 첫 진행 정보(batch 84, 115)는 `latest_offsets`가 빈 Map이라 backlog 계산이 음수였다.
+- 재실행 배치의 정상 쓰기는 4.9초·4.7초로 기준의 4배다. 재시작 직후 JVM·JDBC 연결 준비 비용으로 보며, 3단계 재시작 직후 분류 action 증가와 같은 현상이다.
+- 최종 대조: 생성기 4,500,000건 ACK(실패·미전달 0). 고유 `event_id` = `FINAL` 뷰 = `normal_order` = **3,825,832**(누락 없음). 물리 행 3,834,405 − 고유 수 = 8,573 = 저장 후 오류에서 남은 행. 시도 행은 성공 166, `orders_write_action` 실패 2.
+
+### 측정 후 남은 작업 (2026-11-18)
+
+- 같은 ID에 다른 `event_timestamp`를 넣는 충돌 점검 쿼리 검증.
+- 정상 적재 성공 후 DLQ 쓰기 실패 주입은 3단계 Parquet 경로에서만 확인했다. ClickHouse 경로에서는 다시 하지 않았다.
+- 15분 이상 실행해 15분 범위가 꽉 찬 상태의 `FINAL` 조회 비용과 1시간 파티션 경계를 넘는 part 수. 이번 실행은 12분이다.
+- 대시보드 조회 반영: backlog 해석 제약, 빈 `latest_offsets` 처리, INSERT 실패 필터(5단계 Grafana).
+- WSL 시계 차이 원인 확인. 측정 ms 값은 약 4% 크게 나온다.
+
 ## 완료 기준
 
-측정 부하는 3단계와 같은 5,000 EPS 지속 부하로 고정한다. 단계별 지연·대시보드 조회 시간 목표는 첫 측정 결과를 기준으로 확정해 이 절에 기록한다. 아래 계측은 요구사항이며 아직 구현·검증하지 않았다.
+측정 부하는 3단계와 같은 5,000 EPS 지속 부하로 고정한다. 단계별 지연·대시보드 조회 시간 목표는 첫 측정 결과([지속 부하 측정 결과](#지속-부하-측정-결과-2026-11-18))를 기준으로 아래와 같이 정한다.
 
-- 선택 근거: 3단계와 같은 부하를 써서 Spark 결과와 비교할 수 있다. 실측 전에 지연 목표를 정하면 근거가 없는 숫자가 된다. 3단계도 측정 후 기준을 확정하는 방식으로 진행했다.
-- 비교한 대안: 목표를 먼저 고정(예: Kafka → Spark p95 ≤ 10초, 15분 조회 p95 ≤ 1초)하면 합격 여부가 명확하지만 수치 근거가 약하다.
+| 지표 | 목표 | 실측 (2026-11-18) |
+| --- | --- | --- |
+| 생성기 실제 ACK EPS | 4,750 이상 | 5,216 |
+| 트리거 시간 | 5초 초과 없음(워밍업·재시작 직후 제외) | 최대 4.76초 |
+| Kafka → 콜백 배치별 p95 | 6초 이하 | 최대 5.76초 |
+| 서버 INSERT 시간 p95 | 500ms 이하 | 255ms |
+| `gold.orders_deduplicated` 15분 조회 p95 | 1초 이하 | 336ms |
+| 파티션당 활성 part 수 | 50 이하 | 최대 11 |
+
+- 선택 근거: 실측값보다 여유를 둔 값이다(INSERT 약 2배, 15분 조회 약 3배, part 수 약 4.5배). 트리거·Kafka → 콜백 목표는 트리거 주기 5초에 묶여 있어 여유를 작게 둔다. 15분 조회는 조합 D(롤업) 도입 판단 기준으로 쓴다.
+- 비교한 대안: 실측 최댓값 그대로 목표로 쓰면 환경 변동(시계 차이 약 4%, 다른 프로세스)만으로 실패한다.
 
 INSERT 성공 의미와 조회 경로, 중복 제거를 확인한다. 운영 지표 3개 테이블에 구간별 지표가 배치·구간마다 기록되는지 확인한다. 쓰기 지연과 적재 실패를 각각 주입해 해당 구간 지표(`orders_write_ms`, `query_log` INSERT 시간, offset backlog)가 바뀌는지로 병목 구간을 판별할 수 있는지 검증한다.

@@ -151,7 +151,7 @@ docker compose down --volumes
 
 ## 7. Spark Structured Streaming 실행 (3단계)
 
-Spark 서비스는 `compose.yaml`의 `spark`다. Kafka(6절)가 실행 중이고 `kafka-init`이 완료돼야 시작한다. `.env`에는 `.env.example`의 `SPARK_*` 키를 모두 추가한다. 누락하면 `docker compose`가 설정 오류로 거부한다. 기본값은 `SPARK_MASTER=local[3]`, `SPARK_DRIVER_MEMORY=2g`, `SPARK_TRIGGER_INTERVAL=5 seconds`, `SPARK_MAX_OFFSETS_PER_TRIGGER=50000`, `SPARK_SHUFFLE_PARTITIONS=3`, `SPARK_STARTING_OFFSETS=earliest`, 체크포인트 `/opt/spark/checkpoints/orders`, 출력 `/opt/spark/output/orders`다. `SPARK_LATENCY_METRICS_ENABLED`(기본 `true`)는 `.env`에 없으면 Compose가 `true`로 두며, `false`는 계측 오버헤드 대조군 측정에만 쓴다. 체크포인트·출력은 볼륨 `spark-checkpoints`·`spark-output`에 저장되며 컨테이너를 지워도 남는다. 명령은 프로젝트 루트에서 실행한다.
+Spark 서비스는 `compose.yaml`의 `spark`다. Kafka(6절)가 실행 중이고 `kafka-init`·`clickhouse-init`(8절)이 완료돼야 시작한다. 4단계부터 정상 주문은 Parquet 대신 ClickHouse `silver.order_events`에 JDBC로 적재한다. `.env`에는 `.env.example`의 `SPARK_*` 키를 모두 추가한다. 누락하면 `docker compose`가 설정 오류로 거부한다. 기본값은 `SPARK_MASTER=local[3]`, `SPARK_DRIVER_MEMORY=2g`, `SPARK_TRIGGER_INTERVAL=5 seconds`, `SPARK_MAX_OFFSETS_PER_TRIGGER=50000`, `SPARK_SHUFFLE_PARTITIONS=3`, `SPARK_STARTING_OFFSETS=earliest`, 체크포인트 `/opt/spark/checkpoints/orders`, `SPARK_JDBC_BATCH_SIZE=50000`, `SPARK_JDBC_NUM_PARTITIONS=3`이다. `SPARK_LATENCY_METRICS_ENABLED`(기본 `true`)는 `.env`에 없으면 Compose가 `true`로 두며, `false`는 계측 오버헤드 대조군 측정에만 쓴다. 체크포인트는 볼륨 `spark-checkpoints`에 저장되며 컨테이너를 지워도 남는다. 3단계 Parquet 출력 볼륨 `spark-output`은 Compose에서 제거했다. 남은 볼륨은 `docker volume rm log-etlm-2_spark-output`으로 지운다. 명령은 프로젝트 루트에서 실행한다.
 
 ### 기동·로그·중지
 
@@ -159,7 +159,7 @@ Spark 서비스는 `compose.yaml`의 `spark`다. Kafka(6절)가 실행 중이고
 docker compose up -d kafka kafka-init       # 브로커·토픽
 docker compose up -d --build spark          # 스트리밍 쿼리 시작
 docker compose logs -f spark                # 진행·건수 로그
-docker compose stop spark                   # 중지. 체크포인트·출력 볼륨은 유지
+docker compose stop spark                   # 중지. 체크포인트 볼륨은 유지
 ```
 
 실행 중에는 `http://localhost:4040`(루프백)에서 Spark UI를 볼 수 있다.
@@ -170,20 +170,19 @@ docker compose stop spark                   # 중지. 체크포인트·출력 �
 
 ### 테스트
 
-코드가 읽기 전용 마운트라 pytest 캐시를 끈다. 브로커는 필요 없다.
+코드가 읽기 전용 마운트라 pytest 캐시를 끈다. 브로커·ClickHouse는 필요 없다(JDBC·지표 쓰기는 테스트에서 대체한다).
 
 ```bash
 docker compose run --rm --no-deps spark python3 -m pytest -p no:cacheprovider /opt/app/apps/streaming/tests -q
 ```
 
-### 측정용 별도 체크포인트·출력 경로 실행
+### 측정용 별도 체크포인트 실행
 
-운영 체크포인트·출력과 섞이지 않도록 경로를 바꿔 별도 컨테이너로 실행한다. 최초 기동 시점 이후의 입력만 처리하려면 `SPARK_STARTING_OFFSETS=latest`로 지정한다. `<이름>`과 `<경로>`는 실행마다 새로 정한다.
+운영 체크포인트와 섞이지 않도록 경로를 바꿔 별도 컨테이너로 실행한다. 적재 대상 테이블은 같으므로 측정 행은 `spark_run_id`·`spark_batch_id`로 구분한다. 최초 기동 시점 이후의 입력만 처리하려면 `SPARK_STARTING_OFFSETS=latest`로 지정한다. `<이름>`과 `<경로>`는 실행마다 새로 정한다.
 
 ```bash
 docker compose run -d --no-deps --name <이름> \
   -e SPARK_CHECKPOINT_DIR=/opt/spark/checkpoints/<경로> \
-  -e SPARK_OUTPUT_DIR=/opt/spark/output/<경로> \
   -e SPARK_STARTING_OFFSETS=latest spark
 ```
 
@@ -197,12 +196,12 @@ docker compose run -d --no-deps --name <이름> \
 
 | 증상 | 의미 | 조치 |
 | --- | --- | --- |
-| `failed_stage=orders_write_action`, 예: `Mkdirs failed to create .../_temporary/...` | 정상 출력 쓰기 실패. DLQ는 시도하지 않았다 | 출력 경로 권한·용량을 고친 뒤 같은 체크포인트·출력 경로·설정으로 재시작한다. 중복은 생기지 않는다 |
+| `failed_stage=orders_write_action`, 예: JDBC 연결·인증 오류 | 정상 적재 실패. DLQ는 시도하지 않았다. 일부 쓰기 파티션은 이미 INSERT됐을 수 있다 | ClickHouse 상태·계정을 고친 뒤 같은 체크포인트·설정으로 재시작한다. 재INSERT 중복은 `gold.orders_deduplicated`(`FINAL`)에서 합쳐진다 |
 | `failed_stage=dlq_write_action`, 예: `MESSAGE_TOO_LARGE` | 정상 출력은 기록됐고 DLQ 쓰기가 실패했다 | DLQ 토픽·브로커 상태를 고친 뒤 같은 체크포인트로 재시작한다. 정상 출력이 해당 배치 정상 건수만큼 중복된다 |
 | 콜백은 성공했으나 체크포인트 `commits`의 `Permission denied` | 출력은 모두 기록됐고 커밋만 실패했다 | 체크포인트 권한을 고친 뒤 같은 체크포인트로 재시작한다. 정상 출력과 DLQ가 해당 배치 건수만큼 중복된다 |
 | `KafkaIllegalStateException: Some data may have been lost because they are not available in Kafka any more; ...` (원인 `OffsetOutOfRangeException`) | 체크포인트의 다음 offset이 보관 기간·크기 제한으로 이미 삭제됐다. 종료 코드 1이며 소실 구간을 건너뛰고 커밋하지 않는다 | 아래 offset 소실 조치를 따른다 |
 
-재시작 뒤 같은 배치는 같은 `batch_id`와 offset 범위로 다시 실행되고 커밋되며 유실은 없다. 중복은 제거하지 않는다. 같은 원본 위치는 정상 출력의 `kafka_topic`·`kafka_partition`·`kafka_offset`, DLQ의 메시지 키(`source_topic:source_partition:source_offset`)로 찾는다. 정상 출력 중복의 저장 단계 처리는 4단계(ClickHouse) 범위다. 검증 결과는 [Spark PRD](../prd/03-stream-processing.md#출력-장애와-동일-체크포인트-재시작-검증)를 따른다.
+재시작 뒤 같은 배치는 같은 `batch_id`와 offset 범위로 다시 실행되고 커밋되며 유실은 없다. 중복은 제거하지 않는다. 같은 원본 위치는 정상 출력의 `kafka_topic`·`kafka_partition`·`kafka_offset`, DLQ의 메시지 키(`source_topic:source_partition:source_offset`)로 찾는다. 정상 출력 중복은 ClickHouse 조회 뷰 `gold.orders_deduplicated`에서 제거한다. 검증 결과는 [Spark PRD](../prd/03-stream-processing.md#출력-장애와-동일-체크포인트-재시작-검증)를 따른다.
 
 #### offset 소실 조치
 
@@ -217,10 +216,72 @@ docker compose run -d --no-deps --name <이름> \
 ### 체크포인트 초기화 시 주의
 
 - 체크포인트는 소비 위치와 배치 계획을 저장한다. 이를 삭제하거나 다른 경로로 바꾸면 `SPARK_STARTING_OFFSETS`부터 다시 시작한다. `earliest`는 보관 중인 모든 원본을 다시 읽어 같은 출력 경로에 중복을 만들고, `latest`는 중지 중에 들어온 데이터를 건너뛰어 누락을 만든다.
-- 체크포인트만 지우고 출력은 두면 정상 출력이 중복된다. 반대로 출력만 지우고 체크포인트를 두면 이미 커밋된 구간은 다시 만들어지지 않는다. 체크포인트와 출력 경로는 짝으로 다룬다.
+- 체크포인트만 지우고 `earliest`로 시작하면 보관 중인 원본이 다시 적재된다. 같은 `event_id`라 조회 뷰에서는 합쳐지지만 물리 행과 병합 부하는 늘어난다.
 - 측정·검증에는 운영 경로 대신 별도 경로를 쓴다(위 측정용 실행).
-- 실행 중인 쿼리의 체크포인트·출력 경로를 직접 지우거나 권한을 바꾸지 않는다. 쿼리가 실패한다.
+- 실행 중인 쿼리의 체크포인트 경로를 직접 지우거나 권한을 바꾸지 않는다. 쿼리가 실패한다.
 
 ### DLQ 조회·원문 복원
 
 DLQ 메시지에는 원문 bytes가 Base64(`raw_value_base64`)로 있고, 키는 원본 위치 `source_topic:source_partition:source_offset`이다. 조회·복원·원본 대조 절차와 재실행 명령은 [DLQ 조회·원문 bytes 복원 검증](../measurements/2026-11-17-dlq-lookup-restoration.md)과 `docs/measurements/verify_dlq_lookup.py`를 따른다. 이 도구는 `assign`으로 명시한 offset만 읽고 소비 offset을 커밋하지 않는다. 이미 기록된 DLQ 데이터의 수정·재투입·자동 재처리는 지원하지 않는다.
+
+## 8. ClickHouse 실행 (4단계)
+
+서비스는 `compose.yaml`의 `clickhouse`(서버)와 `clickhouse-init`(일회성 계정·스키마·권한 적용)이다. `.env`에 `.env.example`의 4단계 키를 모두 추가하고 비밀번호 4개(`CLICKHOUSE_PASSWORD`, `CLICKHOUSE_SPARK_PASSWORD`, `CLICKHOUSE_GENERATOR_PASSWORD`, `CLICKHOUSE_GRAFANA_PASSWORD`)를 직접 정한다. 누락하면 `docker compose`가 설정 오류로 거부한다. 설계 근거는 [ClickHouse PRD](../prd/04-clickhouse-storage.md)를 따른다.
+
+```bash
+docker compose up -d clickhouse clickhouse-init   # 서버 기동 후 init이 Exited (0)이면 적용 완료
+docker compose logs clickhouse-init               # "clickhouse-init: schema and accounts applied"
+docker compose run --rm clickhouse-init           # 스키마·계정 재적용(반복 실행 안전)
+```
+
+- DDL은 `infra/clickhouse/schema.sql`, 계정·권한은 `infra/clickhouse/init.sh`, 저메모리 설정은 `infra/clickhouse/config.d/low-memory.xml`이다. `IF NOT EXISTS`라 기존 테이블의 컬럼·설정은 바뀌지 않는다. 바꾸려면 `schema.sql`에 `ALTER`를 추가하거나 볼륨 `clickhouse-data`를 지우고 다시 만든다.
+- 데이터는 볼륨 `clickhouse-data`에 저장한다. 주문은 24시간, 운영 지표는 24시간 TTL이다.
+- HTTP 포트는 `127.0.0.1:${CLICKHOUSE_HTTP_HOST_PORT}`에만 게시한다.
+
+### 조회
+
+관리자 계정으로 컨테이너 안에서 조회한다. 비밀번호는 `.env`에서 읽는다.
+
+```bash
+docker compose exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD"'
+```
+
+```sql
+-- 최근 15분 주문 수·매출(중복 제거 경로)
+SELECT count(), sum(total_amount) FROM gold.orders_deduplicated WHERE event_timestamp >= now() - INTERVAL 15 MINUTE;
+-- 생성기 1초 구간 지표(최근 실행). 분위수는 구간별 값이며 여러 행을 평균하지 않는다.
+SELECT interval_start, generated, acked, failed, undelivered, queue_len_max, ack_latency_ms_p99, gen_to_kafka_ms_p99, gen_serialize_us_p99
+FROM ops.producer_stats WHERE run_id = (SELECT run_id FROM ops.producer_stats ORDER BY interval_start DESC LIMIT 1)
+ORDER BY interval_start;
+-- 배치별 단계 시간과 Kafka → 콜백 지연
+SELECT batch_id, status, failed_stage, order_rows, classification_ms, orders_write_ms, dlq_write_ms, kafka_to_callback_ms_p95
+FROM ops.spark_batch_attempts ORDER BY callback_started_at DESC LIMIT 10;
+-- 트리거 시간과 offset backlog
+SELECT batch_id, trigger_execution_ms, num_input_rows,
+       if(empty(latest_offsets), NULL, arraySum(mapValues(latest_offsets)) - arraySum(mapValues(end_offsets))) AS backlog
+FROM ops.spark_query_progress ORDER BY trigger_at DESC LIMIT 10;
+-- Spark JDBC INSERT 요청별 서버 처리시간
+SELECT event_time, written_rows, query_duration_ms FROM system.query_log
+WHERE user = 'spark_writer' AND query_kind = 'Insert' AND type = 'QueryFinish' AND has(tables, 'silver.order_events')
+ORDER BY event_time DESC LIMIT 10;
+-- Spark INSERT 실패. 권한·인증 거부는 tables가 비어 있으므로 tables로 거르지 않는다.
+SELECT event_time, type, exception_code, written_rows, substring(exception, 1, 120) FROM system.query_log
+WHERE user = 'spark_writer' AND type != 'QueryStart' AND exception_code != 0
+ORDER BY event_time DESC LIMIT 10;
+-- 재INSERT로 생긴 물리 중복 수(실행 단위). 실패 INSERT의 written_rows는 실제 남은 행 수가 아니다.
+SELECT count() - uniqExact(event_id) AS duplicates FROM silver.order_events WHERE spark_query_id = '<query_id>';
+```
+
+지표 해석 주의(근거: [ClickHouse PRD 장애 주입 측정 결과](../prd/04-clickhouse-storage.md#장애-주입-측정-결과-2026-11-18)):
+
+- backlog는 배치 계획 시점 값이라 배치 입력이 `SPARK_MAX_OFFSETS_PER_TRIGGER`보다 적으면 0이다. 처리가 느려지면 먼저 트리거 시간 5초 초과, 배치 입력 증가, Kafka → 콜백 p95 증가로 나타난다.
+- 재시작 후 첫 진행 정보는 `latest_offsets`가 비어 있어 backlog를 계산할 수 없다(위 조회에서 NULL).
+- `orders_write_action` 실패의 원인은 `query_log` 예외 유형으로 가른다. `ExceptionWhileProcessing`이면 ClickHouse가 처리 중 실패해 일부 행이 남았을 수 있고(재시작 시 중복), `ExceptionBeforeStart`(예: 497 권한)이면 저장되지 않았다.
+- `orders_write_ms`와 `query_log` INSERT 시간이 함께 늘면 ClickHouse 쪽, `orders_write_ms`만 늘면 Spark 태스크·네트워크 쪽이다.
+
+### 운영 지표 쓰기 실패
+
+Spark의 `ops.*` INSERT 실패는 `WARN streaming ops metrics insert failed table=...` 로그만 남기고 주문 처리는 계속한다. 해당 구간 지표는 비어 있으므로 Spark 로그의 `latency`·`progress` JSON으로 대조한다.
+
+생성기의 `ops.producer_stats` INSERT 실패는 stderr에 `{"warning": "producer_stats insert failed", ...}` 한 줄을 남기고 생성은 계속한다. 최종 통계의 `producer_stats.failed_rows`가 잃은 행 수다. 기록을 끄려면 `PRODUCER_CLICKHOUSE_HTTP_URL=`로 실행한다. kafka 출력에서만 기록한다.
+
