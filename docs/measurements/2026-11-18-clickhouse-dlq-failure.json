@@ -1,0 +1,501 @@
+{
+ "status": "DLQ 쓰기 실패(Kafka DLQ 토픽 max.message.bytes=100) 주입, ClickHouse 경로 2회 실행",
+ "code": "HEAD aae320e, apps/streaming 변경 없음",
+ "load": "생성기 2,000 EPS(1차 300초, 2차 240초), 실행마다 새 체크포인트·startingOffsets=latest",
+ "clock_note": "시각은 KST. WSL 단조 시계 차이(약 4%)는 이번 판정에 영향 없음",
+ "raw_logs_location": "/tmp/claude-1000/-home-kang-projects-log-etlm-2/0c7f0e27-1939-4c3e-bd26-c69375696acc/scratchpad/dlq, dlq2",
+ "injection": {
+  "method": "kafka-configs.sh --alter --entity-type topics --entity-name dlq.ecommerce.orders.v1 --add-config max.message.bytes=100",
+  "revert": "--delete-config max.message.bytes",
+  "note": "DLQ는 ClickHouse 테이블이 아니라 Kafka 토픽이므로 ClickHouse 권한 회수로는 주입할 수 없다"
+ },
+ "run1_revert_during_retry": {
+  "query_id": "8ea013c2-d49f-4543-99fd-186b39f04e6a",
+  "producer_run_id": "6ccab8e7d51044979bc18a81c3f51486",
+  "checkpoint": "/opt/spark/checkpoints/ch-dlq-20261118",
+  "events": [
+   {
+    "event": "spark_started",
+    "elapsed": null,
+    "container": "log-etlm-2-spark-chdlq-20261118-a"
+   },
+   {
+    "event": "sources_ready",
+    "elapsed": null,
+    "query_id": "8ea013c2-d49f-4543-99fd-186b39f04e6a"
+   },
+   {
+    "event": "dlq_offset_start",
+    "elapsed": null,
+    "offset": 1323606
+   },
+   {
+    "event": "generator_started",
+    "elapsed": 0.0,
+    "seconds": 300
+   },
+   {
+    "event": "inject_dlq_too_large",
+    "elapsed": 94.858
+   },
+   {
+    "event": "revert_dlq_too_large",
+    "elapsed": 217.116
+   },
+   {
+    "event": "spark_final_state",
+    "elapsed": 217.144,
+    "container": "log-etlm-2-spark-chdlq-20261118-a",
+    "status": "running",
+    "exit_code": 0
+   },
+   {
+    "event": "hang_confirmed",
+    "elapsed": 442.427,
+    "note": "stage 135 active 3 tasks since 04:00:57Z, producer network thread absent"
+   },
+   {
+    "event": "spark_stopped",
+    "elapsed": 443.188,
+    "container": "log-etlm-2-spark-chdlq-20261118-a",
+    "exit_code": 143
+   },
+   {
+    "event": "spark_started",
+    "elapsed": 443.925,
+    "container": "log-etlm-2-spark-chdlq-20261118-b"
+   },
+   {
+    "event": "drained",
+    "elapsed": 508.539,
+    "backlog": 0
+   },
+   {
+    "event": "dlq_offset_end",
+    "elapsed": 520.369,
+    "offset": 1353603
+   },
+   {
+    "event": "spark_final_state",
+    "elapsed": 520.391,
+    "container": "log-etlm-2-spark-chdlq-20261118-b",
+    "status": "running",
+    "exit_code": 0
+   }
+  ],
+  "generator": {
+   "kinds": {
+    "normal_order": 510172,
+    "health_check": 59840,
+    "invalid_order": 29988
+   },
+   "kafka": {
+    "acked": 600000,
+    "failed": 0,
+    "undelivered": 0
+   }
+  },
+  "batch_status": {
+   "succeeded:": 27
+  },
+  "target_batch_attempts": [
+   {
+    "el": 90.8,
+    "run_id": "b44706e3-3717-487d-9ecb-59b9515ec11d",
+    "batch_id": 16,
+    "status": "succeeded",
+    "failed_stage": "",
+    "input_rows": 10342,
+    "order_rows": 8808,
+    "dlq_rows": 521,
+    "orders_ms": 1277,
+    "dlq_ms": 200
+   },
+   {
+    "el": 451.2,
+    "run_id": "1f1db4ae-39aa-4fb5-a31c-b0662cbb1f35",
+    "batch_id": 17,
+    "status": "succeeded",
+    "failed_stage": "",
+    "input_rows": 9933,
+    "order_rows": 8456,
+    "dlq_rows": 483,
+    "orders_ms": 3192,
+    "dlq_ms": 328
+   },
+   {
+    "el": 460,
+    "run_id": "1f1db4ae-39aa-4fb5-a31c-b0662cbb1f35",
+    "batch_id": 18,
+    "status": "succeeded",
+    "failed_stage": "",
+    "input_rows": 49999,
+    "order_rows": 42666,
+    "dlq_rows": 2463,
+    "orders_ms": 3591,
+    "dlq_ms": 384
+   }
+  ],
+  "target_batch_rows_now": [
+   {
+    "run_id": "1f1db4ae-39aa-4fb5-a31c-b0662cbb1f35",
+    "rows": 8456,
+    "uniq": 8456
+   }
+  ],
+  "rows": {
+   "physical": 510172,
+   "unique_ids": 510172,
+   "min_ts": "2026-11-18 03:59:19.421",
+   "max_ts": "2026-11-18 04:04:18.138",
+   "final_view_in_range": 510172,
+   "other_query_rows_in_range": 0,
+   "physical_minus_unique": 0
+  },
+  "progress_near_fault": [
+   {
+    "el": 80.7,
+    "run_id": "b44706e3-3717-487d-9ecb-59b9515ec11d",
+    "batch_id": 14,
+    "input": 10000,
+    "backlog": 0
+   },
+   {
+    "el": 85.7,
+    "run_id": "b44706e3-3717-487d-9ecb-59b9515ec11d",
+    "batch_id": 15,
+    "input": 9999,
+    "backlog": 0
+   },
+   {
+    "el": 90.7,
+    "run_id": "b44706e3-3717-487d-9ecb-59b9515ec11d",
+    "batch_id": 16,
+    "input": 10342,
+    "backlog": 0
+   },
+   {
+    "el": 450.5,
+    "run_id": "1f1db4ae-39aa-4fb5-a31c-b0662cbb1f35",
+    "batch_id": 17,
+    "input": 9933,
+    "backlog": -27960958
+   },
+   {
+    "el": 459.9,
+    "run_id": "1f1db4ae-39aa-4fb5-a31c-b0662cbb1f35",
+    "batch_id": 18,
+    "input": 49999,
+    "backlog": 358462
+   },
+   {
+    "el": 467.8,
+    "run_id": "1f1db4ae-39aa-4fb5-a31c-b0662cbb1f35",
+    "batch_id": 19,
+    "input": 49998,
+    "backlog": 308464
+   },
+   {
+    "el": 474.1,
+    "run_id": "1f1db4ae-39aa-4fb5-a31c-b0662cbb1f35",
+    "batch_id": 20,
+    "input": 49999,
+    "backlog": 258465
+   },
+   {
+    "el": 479,
+    "run_id": "1f1db4ae-39aa-4fb5-a31c-b0662cbb1f35",
+    "batch_id": 21,
+    "input": 49998,
+    "backlog": 208467
+   }
+  ],
+  "max_backlog": 358462,
+  "last_progress": {
+   "el": 504.6,
+   "run_id": "1f1db4ae-39aa-4fb5-a31c-b0662cbb1f35",
+   "batch_id": 26,
+   "input": 8473,
+   "backlog": 0
+  },
+  "dlq": {
+   "offset_start": 1323606,
+   "offset_end": 1353603,
+   "messages": 29997,
+   "unique_keys": 29988,
+   "duplicate_keys": 9,
+   "expected_invalid": 29988,
+   "dlq_rows_sum_succeeded": 29988
+  },
+  "kst": {
+   "spark_start": "12:59:01",
+   "generator_start": "12:59:19",
+   "inject": "13:00:54",
+   "batch17_callback": "13:00:55",
+   "revert": "13:02:56",
+   "hang_confirmed_stop_a": "13:06:42",
+   "restart_b": "13:06:43",
+   "drained": "13:07:47"
+  },
+  "spark_log_a": {
+   "splitting_and_retrying_MESSAGE_TOO_LARGE_warn": 42800,
+   "first": "13:00:57",
+   "error": "13:02:56 ERROR KafkaThread: Uncaught exception in thread 'kafka-producer-network-thread | producer-1': java.lang.StackOverflowError (FutureRecordMetadata.value 재귀)",
+   "thread_dump_after_revert": "stage 135(DLQ save) 활성 태스크 3개가 KafkaProducer.flush → RecordAccumulator.awaitFlushCompletion에서 WAITING, producer network thread 없음",
+   "terminated_with_error": false
+  },
+  "hang": "배치 17 콜백이 반환되지 않아 시도 행·진행 행이 13:00:50 이후 없음. 되돌린 뒤 3.8분 동안 같은 상태, 컨테이너 중지(exit 143) 후 재시작으로 복구",
+  "dlq_partial": {
+   "offsets": "1332716~1332724",
+   "append_time": "13:02:56.019",
+   "count": 9,
+   "note": "되돌림 직후 재시도 중이던 9건이 기록된 뒤 producer 스레드가 죽었다. 재실행이 같은 키 9개를 다시 기록"
+  },
+  "order_inserts_query_log": {
+   "inserts": 46,
+   "written_rows": 518628,
+   "exceptions": 0,
+   "note": "518,628 = 고유 510,172 + 배치 17 재INSERT 8,456. 분석 시점에는 백그라운드 병합으로 물리 행 = 고유"
+  }
+ },
+ "run2_fault_held": {
+  "query_id": "2e068e17-2aee-4a0d-b8f1-9d5a84cc2177",
+  "producer_run_id": "6eb64b86b9dc41ccb972f9abdde8dea2",
+  "checkpoint": "/opt/spark/checkpoints/ch-dlq2-20261118",
+  "events": [
+   {
+    "event": "spark_started",
+    "elapsed": null,
+    "container": "log-etlm-2-spark-chdlq2-20261118-a"
+   },
+   {
+    "event": "sources_ready",
+    "elapsed": null,
+    "query_id": "2e068e17-2aee-4a0d-b8f1-9d5a84cc2177"
+   },
+   {
+    "event": "dlq_offset_start",
+    "elapsed": null,
+    "offset": 1353603
+   },
+   {
+    "event": "generator_started",
+    "elapsed": 0.0,
+    "seconds": 240
+   },
+   {
+    "event": "inject_dlq_too_large",
+    "elapsed": 62.409
+   },
+   {
+    "event": "spark_exited",
+    "elapsed": 185.373,
+    "container": "log-etlm-2-spark-chdlq2-20261118-a",
+    "exit_code": 1
+   },
+   {
+    "event": "revert_dlq_too_large",
+    "elapsed": 187.456
+   },
+   {
+    "event": "spark_started",
+    "elapsed": 188.254,
+    "container": "log-etlm-2-spark-chdlq2-20261118-b"
+   },
+   {
+    "event": "generator_exited",
+    "elapsed": 239.066,
+    "exit_code": 0
+   },
+   {
+    "event": "drained",
+    "elapsed": 254.116,
+    "backlog": 0
+   },
+   {
+    "event": "dlq_offset_end",
+    "elapsed": 265.687,
+    "offset": 1377856
+   },
+   {
+    "event": "spark_final_state",
+    "elapsed": 265.708,
+    "container": "log-etlm-2-spark-chdlq2-20261118-b",
+    "status": "running",
+    "exit_code": 0
+   }
+  ],
+  "generator": {
+   "kinds": {
+    "normal_order": 407341,
+    "health_check": 48406,
+    "invalid_order": 24253
+   },
+   "kafka": {
+    "acked": 480000,
+    "failed": 0,
+    "undelivered": 0
+   }
+  },
+  "batch_status": {
+   "succeeded:": 22,
+   "failed:dlq_write_action": 1
+  },
+  "target_batch_attempts": [
+   {
+    "el": 55.9,
+    "run_id": "a817cfcd-ff19-418e-8e61-246f1c298c1a",
+    "batch_id": 12,
+    "status": "succeeded",
+    "failed_stage": "",
+    "input_rows": 9993,
+    "order_rows": 8458,
+    "dlq_rows": 494,
+    "orders_ms": 893,
+    "dlq_ms": 138
+   },
+   {
+    "el": 60.9,
+    "run_id": "a817cfcd-ff19-418e-8e61-246f1c298c1a",
+    "batch_id": 13,
+    "status": "failed",
+    "failed_stage": "dlq_write_action",
+    "input_rows": 9996,
+    "order_rows": 8479,
+    "dlq_rows": 517,
+    "orders_ms": 1279,
+    "dlq_ms": 120956
+   },
+   {
+    "el": 196.3,
+    "run_id": "a98f15b7-4628-4a68-b259-39047f7c2694",
+    "batch_id": 13,
+    "status": "succeeded",
+    "failed_stage": "",
+    "input_rows": 9996,
+    "order_rows": 8479,
+    "dlq_rows": 517,
+    "orders_ms": 3562,
+    "dlq_ms": 413
+   },
+   {
+    "el": 205.9,
+    "run_id": "a98f15b7-4628-4a68-b259-39047f7c2694",
+    "batch_id": 14,
+    "status": "succeeded",
+    "failed_stage": "",
+    "input_rows": 49998,
+    "order_rows": 42395,
+    "dlq_rows": 2491,
+    "orders_ms": 4168,
+    "dlq_ms": 449
+   }
+  ],
+  "target_batch_rows_now": [
+   {
+    "run_id": "a98f15b7-4628-4a68-b259-39047f7c2694",
+    "rows": 8479,
+    "uniq": 8479
+   }
+  ],
+  "rows": {
+   "physical": 407341,
+   "unique_ids": 407341,
+   "min_ts": "2026-11-18 04:09:54.271",
+   "max_ts": "2026-11-18 04:13:53.141",
+   "final_view_in_range": 407341,
+   "other_query_rows_in_range": 0,
+   "physical_minus_unique": 0
+  },
+  "progress_near_fault": [
+   {
+    "el": 50.8,
+    "run_id": "a817cfcd-ff19-418e-8e61-246f1c298c1a",
+    "batch_id": 11,
+    "input": 10326,
+    "backlog": 0
+   },
+   {
+    "el": 55.8,
+    "run_id": "a817cfcd-ff19-418e-8e61-246f1c298c1a",
+    "batch_id": 12,
+    "input": 9993,
+    "backlog": 0
+   },
+   {
+    "el": 195.5,
+    "run_id": "a98f15b7-4628-4a68-b259-39047f7c2694",
+    "batch_id": 13,
+    "input": 9996,
+    "backlog": -28491366
+   },
+   {
+    "el": 205.8,
+    "run_id": "a98f15b7-4628-4a68-b259-39047f7c2694",
+    "batch_id": 14,
+    "input": 49998,
+    "backlog": 241574
+   },
+   {
+    "el": 214.3,
+    "run_id": "a98f15b7-4628-4a68-b259-39047f7c2694",
+    "batch_id": 15,
+    "input": 49998,
+    "backlog": 208574
+   },
+   {
+    "el": 222.7,
+    "run_id": "a98f15b7-4628-4a68-b259-39047f7c2694",
+    "batch_id": 16,
+    "input": 49998,
+    "backlog": 175149
+   }
+  ],
+  "max_backlog": 241574,
+  "last_progress": {
+   "el": 250.8,
+   "run_id": "a98f15b7-4628-4a68-b259-39047f7c2694",
+   "batch_id": 21,
+   "input": 8065,
+   "backlog": 0
+  },
+  "dlq": {
+   "offset_start": 1353603,
+   "offset_end": 1377856,
+   "messages": 24253,
+   "unique_keys": 24253,
+   "duplicate_keys": 0,
+   "expected_invalid": 24253,
+   "dlq_rows_sum_succeeded": 24253
+  },
+  "kst": {
+   "spark_start": "13:09:43",
+   "generator_start": "13:09:54",
+   "inject": "13:10:56",
+   "batch13_callback": "13:10:55",
+   "spark_exit_1": "13:12:59",
+   "revert": "13:13:01",
+   "restart_b": "13:13:02",
+   "drained": "13:14:08"
+  },
+  "spark_log_a": {
+   "splitting_and_retrying_MESSAGE_TOO_LARGE_warn": 39286,
+   "error": "org.apache.kafka.common.errors.TimeoutException: Expiring 9 record(s) for dlq.ecommerce.orders.v1-0:120004 ms has passed since batch creation",
+   "terminated_with_error": true,
+   "exit_code": 1
+  },
+  "probe_every_30s": "주입 후 producer network thread 살아 있음, DLQ stage 활성 태스크 3개 유지 → 120초 뒤 실패",
+  "order_inserts_query_log": {
+   "inserts": 36,
+   "written_rows": 415820,
+   "exceptions": 0,
+   "note": "415,820 = 고유 407,341 + 배치 13 재INSERT 8,479. 분석 시점에는 병합으로 물리 행 = 고유"
+  }
+ },
+ "clickhouse_query_log_exceptions_spark_writer": 0,
+ "revert_checks": {
+  "dlq_topic_dynamic_configs": "max.message.bytes 없음(주입 전과 같음)",
+  "spark_writer_grants": "ops.spark_batch_attempts·ops.spark_query_progress·silver.order_events SELECT, INSERT(변경 없음)",
+  "spark_containers": "chdlq-a/b, chdlq2-a/b 모두 Exited"
+ }
+}
