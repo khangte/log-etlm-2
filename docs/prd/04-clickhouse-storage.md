@@ -215,6 +215,8 @@ Spark 변환 구현 전에 조회 요구사항을 바탕으로 한 행의 의미
   - Grafana 0.5·512MiB: 1분·5초 갱신 패널의 쿼리 전송과 렌더링만 하며, 계산은 ClickHouse가 한다. 5단계에서 실측해 조정한다.
 - 저메모리 설정: [ClickHouse 운영 팁](https://clickhouse.com/docs/operations/tips)은 메모리 16GB 미만에서 기본값이 메모리 예외를 일으킬 수 있다고 안내한다. `infra/clickhouse/config.d/`에 아래를 적용한다.
   - `metric_log`, `trace_log`, `text_log`, `asynchronous_metric_log`를 끈다. 대시보드가 쓰는 `query_log`·`part_log`는 유지한다.
+  - `query_log`·`part_log`에 TTL `event_date + INTERVAL 3 DAY DELETE`를 둔다. 기본값에는 TTL이 없어 무기한 쌓인다. 대시보드(15분)·경보(5분)는 24시간이면 충분하지만, 지난 측정을 다음 날 다시 조사할 수 있게 3일로 둔다. 2026-11-18 부하 측정 하루분이 두 테이블 합계 약 23MiB였으므로 3일분도 작다. `ops`·`silver`는 24시간이라 24시간이 지난 행은 이 두 테이블만으로 본다.
+  - TTL을 바꾸면 ClickHouse가 기동 시 기존 테이블을 `query_log_N`·`part_log_N`으로 이름을 바꾸고 새 테이블을 만든다. 옛 테이블은 자동 삭제되지 않으므로 확인 후 직접 지운다.
   - mark cache를 512MiB로 줄인다. 문서는 약 500MB까지 줄일 수 있다고 한다.
   - 문서의 다른 항목(쿼리 처리 스레드 1개, `max_block_size` 축소, 병렬 파싱 끄기)은 적용하지 않는다. CPU 2개에서 `FINAL` 조회와 병합을 같이 해야 하므로 스레드를 1개로 묶으면 조회 시간이 늘어난다. 메모리 예외가 실측되면 다시 검토한다.
 - 비교한 대안:

@@ -236,7 +236,9 @@ docker compose run --rm clickhouse-init           # 스키마·계정 재적용(
 ```
 
 - DDL은 `infra/clickhouse/schema.sql`, 계정·권한은 `infra/clickhouse/init.sh`, 저메모리 설정은 `infra/clickhouse/config.d/low-memory.xml`이다. `IF NOT EXISTS`라 기존 테이블의 컬럼·설정은 바뀌지 않는다. 바꾸려면 `schema.sql`에 `ALTER`를 추가하거나 볼륨 `clickhouse-data`를 지우고 다시 만든다.
-- 데이터는 볼륨 `clickhouse-data`에 저장한다. 주문은 24시간, 운영 지표는 24시간 TTL이다.
+- 데이터는 볼륨 `clickhouse-data`에 저장한다. 주문은 24시간, 운영 지표는 24시간, `system.query_log`·`system.part_log`는 3일 TTL이다.
+- `low-memory.xml`은 파일 단위 바인드 마운트다. 파일을 고친 뒤 `docker compose restart clickhouse`는 Docker Desktop에서 옛 마운트를 가리켜 종료 코드 127로 실패할 수 있다. `docker compose up -d --no-deps --force-recreate clickhouse`로 컨테이너를 다시 만든다. 데이터는 볼륨에 있어 유지된다.
+- system 로그 설정(TTL 등)을 바꾸면 기동 시 기존 테이블이 `query_log_0`처럼 이름이 바뀐다. 컬럼이 같으면 `INSERT INTO system.query_log SELECT * FROM system.query_log_0`로 옮기고 행 수를 대조한 뒤 `DROP TABLE system.query_log_0 SYNC`로 지운다. `part_log`도 같다.
 - HTTP 포트는 `127.0.0.1:${CLICKHOUSE_HTTP_HOST_PORT}`에만 게시한다.
 
 ### 조회

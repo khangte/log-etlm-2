@@ -5,6 +5,13 @@
     <trace_log remove="1"/>
     <text_log remove="1"/>
     <asynchronous_metric_log remove="1"/>
+    <!-- 기본값은 TTL이 없어 무기한 쌓인다. 지난 측정을 다음 날 조사할 수 있게 3일 보존한다. -->
+    <query_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </query_log>
+    <part_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </part_log>
     <!-- mark cache 512MiB -->
     <mark_cache_size>536870912</mark_cache_size>
 </clickhouse>
