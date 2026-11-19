@@ -176,7 +176,7 @@ services:
       - ./apps/log_generator/src:/opt/app/apps/log_generator/src:ro
       - ./contracts:/opt/app/contracts:ro
       - spark-checkpoints:/opt/spark/checkpoints
-    cpus: 3
+    cpus: 4
     mem_limit: 3g
     # 실패·멈춤 감시 종료(exit 1) 시 같은 체크포인트로 재시작한다. 횟수 상한(:N)은 컨테이너 수명 누적이라 두지 않는다.
     restart: on-failure
@@ -203,7 +203,7 @@ services:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
     cpus: 0.5
-    mem_limit: 512m
+    mem_limit: 1g
 
 volumes:
   kafka-data:

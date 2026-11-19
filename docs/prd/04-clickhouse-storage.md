@@ -207,12 +207,12 @@ Spark 변환 구현 전에 조회 요구사항을 바탕으로 한 행의 의미
 | 서비스 | `cpus` | `mem_limit` | 기타 |
 | --- | --- | --- | --- |
 | `clickhouse` | 2 | 4g | `ulimits.nofile` 262144 |
-| `grafana` | 0.5 | 512m | - |
+| `grafana` | 0.5 | 1g | 6단계에서 512m → 1g ([자원 조정](06-load-profile.md#자원-조정)) |
 | `host-monitor` | 0.25 | 256m | - |
 
 - 선택 근거:
   - 예산: Kafka UI를 제외하면 남은 자원은 CPU 3개·메모리 약 7GiB다. ClickHouse에 CPU 2개를 주면 ClickHouse가 병합·`FINAL` 조회로 포화돼도 호스트의 로그 생성기·Grafana가 CPU 1개를 쓸 수 있다. `cpus`는 예약이 아닌 상한이므로 ClickHouse가 한가할 때는 다른 프로세스가 그 CPU를 쓴다.
-  - 메모리 4g: 적재 블록·병합·`FINAL` 조회가 쓰는 메모리다. 남은 약 3GiB는 Grafana 512MiB와 생성기·WSL 자체가 쓴다.
+  - 메모리 4g: 적재 블록·병합·`FINAL` 조회가 쓰는 메모리다. 남은 약 3GiB는 Grafana(5단계 512MiB, 6단계 1GiB)와 생성기·WSL 자체가 쓴다.
   - `nofile` 262144: [Docker Hub 이미지 안내](https://hub.docker.com/r/clickhouse/clickhouse-server)의 실행 예시 값이다. 1시간 파티션 25개와 컬럼별 파일로 열린 파일 수가 많다.
   - Grafana 0.5·512MiB: 1분·5초 갱신 패널의 쿼리 전송과 렌더링만 하며, 계산은 ClickHouse가 한다. 5단계에서 실측해 조정한다.
   - `host-monitor` 0.25·256MiB: 평소에는 1초마다 `sleep`만 하는 셸 루프다. 멈춤을 감지했을 때만 `clickhouse-client`를 띄우며, 256MiB는 이 클라이언트 실행 여유다.

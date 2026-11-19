@@ -33,7 +33,7 @@
 루트 `compose.yaml`에 `grafana` 서비스를 추가한다.
 
 - 포트: `127.0.0.1:${GRAFANA_HOST_PORT}:3000`. ClickHouse HTTP와 같이 루프백에만 게시한다.
-- 자원: `cpus` 0.5, `mem_limit` 512m([자원 제한](04-clickhouse-storage.md#자원-제한)). 5단계 측정에서 조정한다.
+- 자원: `cpus` 0.5, `mem_limit` 512m([자원 제한](04-clickhouse-storage.md#자원-제한)). 6단계에서 `mem_limit`을 1g로 올렸다([자원 조정](06-load-profile.md#자원-조정)).
 - 기동 순서: `clickhouse-init` 성공 후 기동한다. `grafana_reader` 계정이 있어야 데이터 소스 상태 확인이 통과한다.
 - 관리자: `GF_SECURITY_ADMIN_USER`·`GF_SECURITY_ADMIN_PASSWORD`를 `.env`에서 필수 값(`:?`)으로 받는다. 익명 접근과 회원 가입은 끈다.
 - 저장: Grafana 내부 DB(SQLite)는 이름 있는 볼륨 `grafana-data`에 둔다. 대시보드·데이터 소스·경보 규칙의 원본은 저장소의 프로비저닝 파일이며, 볼륨을 지워도 같은 상태로 복원된다.

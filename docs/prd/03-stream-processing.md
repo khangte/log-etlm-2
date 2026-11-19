@@ -243,7 +243,7 @@ Spark는 단일 컨테이너의 local 모드로 실행한다. 아래 값은 PRD 
 | --- | --- | --- |
 | `SPARK_MASTER` | `local[3]` | 원본 파티션 3개와 태스크를 1:1로 맞춘다. 늘려도 Kafka 읽기 병렬도는 파티션 수 3에서 막힌다. |
 | `SPARK_DRIVER_MEMORY` | `2g` | local 모드에서는 driver heap이 실행 메모리 전체다. 배치 최대 원문 39.7MB(50,000 × 793B)를 파싱·컬럼 전개로 10배 잡아도 약 400MB다. |
-| 컨테이너 `mem_limit` / `cpus` | `3g` / `3` | heap 2g에 JVM 비heap·네이티브 약 1g를 더한다. Kafka 2 + UI 1 + Spark 3 = 6GiB이며 ClickHouse·Grafana·개발 도구에 약 6GB가 남는다. |
+| 컨테이너 `mem_limit` / `cpus` | `3g` / `3` (6단계에서 `cpus` 4) | heap 2g에 JVM 비heap·네이티브 약 1g를 더한다. Kafka 2 + UI 1 + Spark 3 = 6GiB이며 ClickHouse·Grafana·개발 도구에 약 6GB가 남는다. `cpus`는 스파이크 측정에서 상한에 걸린 주기가 16.8%라서 6단계에서 4로 올렸다([자원 조정](06-load-profile.md#자원-조정)). |
 | `SPARK_TRIGGER_INTERVAL` | `5 seconds` | 배치당 약 25,000건(19.8MB). 반영 지연에 최대 5초를 더하며 60초 갱신 대기보다 작다. |
 | `SPARK_MAX_OFFSETS_PER_TRIGGER` | `50000` | 배치당 입력 상한은 평상시 예상 25,000건의 2배다. 5초 내 처리 시에만 최대 10,000 EPS에 해당하며 처리속도를 보장하지 않는다. 첫 지속 부하 실측에서는 약 50,000건 처리에 평균 16.05초가 걸렸고, 2단 검증 적용 후 재측정에서는 배치당 약 25,000건을 평균 2.04초에 처리했다. |
 | `SPARK_SHUFFLE_PARTITIONS` | `3` | `local[3]` 태스크 슬롯 수와 같게 두어 셔플 후 태스크가 한 번에 모두 실행된다. 슬롯보다 많으면 태스크가 여러 차례로 나뉘어 실행될 뿐 병렬도는 늘지 않고, 배치당 Parquet 파일 수만 늘어난다. 4단계 `SPARK_JDBC_NUM_PARTITIONS`와 같은 값이다. 체크포인트에 기록되므로 변경하려면 체크포인트를 새로 만든다. |
