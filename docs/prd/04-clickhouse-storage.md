@@ -144,6 +144,9 @@ Spark 변환 구현 전에 조회 요구사항을 바탕으로 한 행의 의미
   3. 7,084 이상이면 평소 결과는 값과 무관하게 같다. 배치당 3회, 초당 0.6회, 회당 약 7,083행이다.
   4. 그중 `SPARK_MAX_OFFSETS_PER_TRIGGER`와 같은 50,000을 쓴다. 배치는 최대 50,000 offset(레코드)이므로 한 배치의 정상 주문 행도 50,000을 넘지 않는다. 파티션 불균등·정상 주문 비율 변동·backlog 따라잡기에서도 파티션당 1회, 배치당 최대 3회가 유지된다. 트리거 지연 시 다음 배치가 바로 시작되지만 배치 시작 간격은 5초보다 짧아지지 않으므로 초당 0.6회 이하가 항상 보장된다.
   - 회당 최대 행 수도 50,000으로 권장 상한 100,000 안이다.
+- 배치 상한 55,000 변경 뒤에도 50,000을 유지한다(2026-11-19, [부하 프로파일 자원 조정](06-load-profile.md#자원-조정)). 위 4번의 "같은 값"은 조건이 아니다. 조건은 2번의 `batchsize ≥ 가장 큰 파티션 행 수`다.
+  - 상한 배치 55,000 offset 중 정상 주문은 약 85%(실측 최대 85.3%)인 약 47,000행이다. 고르게 나뉘면 파티션당 약 15,700행이라 파티션당 1회다. 스파이크 측정 3차에서 상한 배치 37개가 모두 성공했다.
+  - 한 파티션이 50,000행을 넘는 경우(정상 주문 비율과 파티션 편중이 모두 극단적인 경우)에만 그 파티션이 2회가 된다. 배치당 최대 4회로 여전히 5회 이하다.
 - `numPartitions = 3`: shuffle 파티션 수와 같아 `coalesce`가 일어나지 않는다. 동시 JDBC 연결은 3개로 제한된다.
 - `async_insert=0`: Spark가 이미 클라이언트에서 행을 묶으므로 동기 INSERT를 쓴다. 공식 문서는 클라이언트에서 묶을 수 있으면 동기 INSERT를 권장한다. 동기 INSERT는 응답이 곧 저장 완료라 [부분 실패와 재시작](#부분-실패와-재시작)의 실패 판단이 단순하다. 0.10부터 드라이버가 이 값을 강제하지 않으므로 서버 기본값에 기대지 않고 명시한다.
 - `isolationLevel`: Spark는 드라이버가 트랜잭션을 지원하지 않으면 이 값을 쓰지 않는다. ClickHouse는 JDBC 트랜잭션을 쓰지 않으므로 기본값을 둔다.
@@ -171,7 +174,7 @@ Spark 변환 구현 전에 조회 요구사항을 바탕으로 한 행의 의미
 - 제약:
   - 회당 행 수는 `batchsize`가 아닌 입력량이 정한다. 평소 회당 약 7,083행으로 권장 최소 1,000행 이상이지만 공식 이상값(10,000~100,000)보다 작다. EPS가 낮아져 파티션이 1,000행 미만이 되면 `batchsize`로 막을 수 없다.
   - backlog 배치는 최대 50,000행을 VALUES 문자열 하나로 만든다. 문자열 크기는 수십 MB 수준으로 추정하며 Spark 컨테이너 3GiB 안에서 버티는지 실측한다.
-  - `batchsize`는 `SPARK_MAX_OFFSETS_PER_TRIGGER`에 맞춘 값이다. 이 값이나 shuffle 파티션 수를 바꾸면 다시 정하며, 값은 환경변수로 받는다.
+  - `batchsize`는 가장 큰 쓰기 파티션 행 수 기준이다. `SPARK_MAX_OFFSETS_PER_TRIGGER`나 shuffle 파티션 수를 바꾸면 조건을 다시 확인하며, 값은 환경변수로 받는다.
   - 위 동작은 [Spark v4.2.1 `JdbcUtils.savePartition`](https://github.com/apache/spark/blob/v4.2.1/sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/jdbc/JdbcUtils.scala#L784)과 [clickhouse-java v0.11.2 `PreparedStatementImpl`](https://github.com/ClickHouse/clickhouse-java/blob/v0.11.2/jdbc-v2/src/main/java/com/clickhouse/jdbc/PreparedStatementImpl.java#L348) 소스로 확인했다. INSERT 1회는 `INSERT ... VALUES (?, ...)` 형태 문에만 해당하며 Spark 일반 append가 이 형태다. 빈 파티션은 INSERT를 보내지 않는다.
   - `numPartitions`는 파티션 수 상한으로만 `coalesce`하며 행 수를 다시 고르게 나누지 않는다. shuffle 3개와 `dropDuplicates`도 파티션 균등을 보장하지 않는다.
   - 태스크·`foreachBatch` 재실행은 INSERT를 추가한다. INSERT 수와 part 수는 다르다. 시간 파티션 경계를 걸친 INSERT는 part를 2개 만들므로 정각 직후 part 수가 잠시 늘어난다.

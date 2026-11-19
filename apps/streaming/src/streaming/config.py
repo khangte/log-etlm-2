@@ -33,7 +33,7 @@ class Config:
     clickhouse_jdbc_url: str  # 정상 주문 JDBC 적재 주소. 동기 INSERT 서버 설정을 포함한다.
     clickhouse_http_url: str  # 운영 지표 HTTP INSERT 주소
     clickhouse_password: str = field(repr=False)  # spark_writer 계정 비밀번호. 로그·repr에 남기지 않는다.
-    jdbc_batch_size: int  # 쓰기 파티션당 INSERT 1회가 되도록 maxOffsetsPerTrigger와 같게 둔다.
+    jdbc_batch_size: int  # 가장 큰 쓰기 파티션 행 수 이상이면 쓰기 파티션당 INSERT 1회다.
     jdbc_num_partitions: int  # ClickHouse 동시 JDBC 연결 수
     stall_timeout_seconds: int  # 진행·유휴 이벤트가 이 시간 동안 없으면 멈춤으로 보고 exit 1
 
