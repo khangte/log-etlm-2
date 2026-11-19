@@ -306,7 +306,7 @@ class LoadProfileTests(unittest.TestCase):
         self.assertEqual(config.profile, LoadProfile(Path(path), (Segment(2, 1000, "a"), Segment(3, 2000, "b"))))
 
     def test_relative_path_is_from_project_root(self):
-        self.assertEqual(load_profile("apps/log_generator/profiles/spike-12k.csv").path, PROFILES / "spike-12k.csv")
+        self.assertEqual(load_profile("apps/log_generator/profiles/spike.csv").path, PROFILES / "spike.csv")
 
     def test_rejects_invalid_profiles(self):
         for text in (
@@ -326,20 +326,20 @@ class LoadProfileTests(unittest.TestCase):
             load_config(ENV_VALUES | {"PRODUCER_LOAD_PROFILE": "/nonexistent-dir/x.csv"})
 
     def test_shipped_profiles_match_prd(self):
-        daily = load_profile(str(PROFILES / "daily.csv")).segments
-        self.assertEqual(sum(s.duration_sec for s in daily), 3600)
-        self.assertEqual(sum(s.duration_sec * s.eps for s in daily), 14_205_000)
-        self.assertEqual(max(s.eps for s in daily), 8000)
-        spike = load_profile(str(PROFILES / "spike-12k.csv")).segments
-        self.assertEqual([(s.duration_sec, s.eps) for s in spike], [(300, 5000), (150, 12000), (450, 5000)])
-        ceiling = load_profile(str(PROFILES / "spike-10k.csv")).segments
-        self.assertEqual([(s.duration_sec, s.eps) for s in ceiling], [(300, 5000), (150, 10000), (450, 5000)])
-        # 2개 프로세스 동시 실행용: 같은 구간 길이에 EPS 절반
-        for name, full in (("spike-10k-half.csv", ceiling), ("spike-12k-half.csv", spike)):
-            half = load_profile(str(PROFILES / name)).segments
-            self.assertEqual([(s.duration_sec, 2 * s.eps, s.label) for s in half],
-                             [(s.duration_sec, s.eps, s.label) for s in full])
+        """프로파일 파일이 부하 PRD(06) 프로파일 정의의 구간·EPS와 같은지 확인한다."""
+        def segments(name):
+            return [(s.duration_sec, s.eps, s.label) for s in load_profile(str(PROFILES / name)).segments]
 
+        self.assertEqual(segments("steady.csv"), [(300, 5000, "base"), (300, 7500, "peak")])
+        self.assertEqual(segments("step.csv"), [(120, 5000, "warmup"), (120, 8000, "step-8k"), (120, 9000, "step-9k"),
+                                                (120, 10000, "step-10k"), (120, 11000, "step-11k"),
+                                                (120, 12000, "step-12k")])
+        self.assertEqual(segments("spike.csv"), [(300, 5000, "warmup"), (150, 12000, "spike"), (300, 5000, "recovery")])
+        daily = segments("daily.csv")
+        self.assertEqual(sum(d for d, _, _ in daily), 3600)
+        self.assertEqual(sum(d * e for d, e, _ in daily), 13_830_000)
+        self.assertEqual(max(e for _, e, _ in daily), 7500)
+        self.assertEqual(sorted(p.name for p in PROFILES.glob("*.csv")), ["daily.csv", "spike.csv", "steady.csv", "step.csv"])
 
 class RunTests(unittest.TestCase):
     def test_stats_match_output(self):

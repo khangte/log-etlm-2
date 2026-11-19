@@ -1,0 +1,7 @@
+duration_sec,eps,label
+120,5000,warmup
+120,8000,step-8k
+120,9000,step-9k
+120,10000,step-10k
+120,11000,step-11k
+120,12000,step-12k
