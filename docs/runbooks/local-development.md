@@ -146,7 +146,7 @@ docker compose down --volumes
 
 - 토픽: 원본(3파티션)·DLQ(1파티션)가 PRD 설정대로 생성됨을 `--describe`로 확인. `down` 후 `up -d`에서 offset(합계 49,612)이 유지됨.
 - Kafka UI: `v1.5.0`, 클러스터 `local` ONLINE·브로커 1·토픽 2 확인. 메모리 약 248MiB(제한 1GiB), Kafka 약 329MiB(제한 2GiB, 유휴·부하 직후).
-- 10초 실행: ACK EPS 약 4,993, ACK 지연 p95 약 104ms(준비 구간 포함), 실패·미전달 0. 60초 성능·브로커 중단·지연 주입은 미검증이다.
+- 10초 실행: ACK EPS 약 4,993, ACK 지연 p95 약 104ms(준비 구간 포함), 실패·미전달 0. 60초 성능·브로커 중단·지연 주입은 2026-11-19에 검증했다([Kafka PRD 2단계 완료 검증](../prd/02-kafka-ingestion.md#2단계-완료-검증-2026-11-19)).
 - 볼륨 마운트는 `/var/lib/kafka/data`다. 기존 `/tmp/kraft-combined-logs` 마운트는 권한 오류로 브로커가 기동하지 못해 변경했다.
 
 ## 7. Spark Structured Streaming 실행 (3단계)
