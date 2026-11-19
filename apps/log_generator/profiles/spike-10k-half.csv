@@ -1,4 +1,0 @@
-duration_sec,eps,label
-300,2500,warmup
-150,5000,ceiling
-450,2500,recovery
