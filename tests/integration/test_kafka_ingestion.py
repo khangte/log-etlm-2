@@ -62,13 +62,13 @@ class KafkaIngestionTests(unittest.TestCase):
         if hasattr(cls, "consumer"):
             cls.consumer.close()
 
-    def send_and_consume(self, payloads: list[bytes]):
-        """KafkaOutput으로 보내고 같은 값을 가진 레코드를 소비해 {값: 레코드}로 반환한다."""
+    def send_and_consume(self, events: list[tuple[bytes, str | None]]):
+        """(payload, event_timestamp)를 KafkaOutput으로 보내고 같은 값을 가진 레코드를 소비해 {값: 레코드}로 반환한다."""
         out = KafkaOutput(self.kafka, io.StringIO())
-        for payload in payloads:
-            out.send(payload)
+        for payload, event_timestamp in events:
+            out.send(payload, event_timestamp)
         out.flush()  # 전송 실패·미전달이면 예외
-        wanted, found = set(payloads), {}
+        wanted, found = {payload for payload, _ in events}, {}
         deadline = time.monotonic() + CONSUME_TIMEOUT_SEC
         while wanted - found.keys() and time.monotonic() < deadline:
             msg = self.consumer.poll(1.0)
@@ -77,19 +77,24 @@ class KafkaIngestionTests(unittest.TestCase):
         self.assertEqual(wanted - found.keys(), set(), "소비하지 못한 메시지가 있음")
         return out, found
 
-    def sample_payloads(self) -> dict[str, bytes]:
-        """정상·health_check·불량(JSON 문법 오류)·UTF-8이 아닌 raw bytes. 고유 event_id로 다른 데이터와 구분한다."""
+    def sample_events(self) -> dict[str, tuple[bytes, str | None]]:
+        """정상·health_check·불량(JSON 문법 오류)·UTF-8이 아닌 raw bytes의 (payload, event_timestamp).
+
+        고유 event_id로 다른 데이터와 구분한다. 해석할 수 없는 payload는 생성기처럼 시각을 넘기지 않는다.
+        """
         gen = EventGenerator(random.Random(), pools.build_user_pool(10))
+        order, health = gen.order(), gen.health_check()
         return {
-            "normal": serialize(gen.order()),
-            "health_check": serialize(gen.health_check()),
-            "malformed": gen.invalid_order("malformed_json").payload,
-            "raw": b"\xff\xfe not-json " + uuid.uuid4().bytes,
+            "normal": (serialize(order), order["event_timestamp"]),
+            "health_check": (serialize(health), health["event_timestamp"]),
+            "malformed": (gen.invalid_order("malformed_json").payload, None),
+            "raw": (b"\xff\xfe not-json " + uuid.uuid4().bytes, None),
         }
 
     def test_original_bytes_preserved_without_lf(self):
-        payloads = self.sample_payloads()
-        _, found = self.send_and_consume(list(payloads.values()))
+        events = self.sample_events()
+        payloads = {name: payload for name, (payload, _) in events.items()}
+        _, found = self.send_and_consume(list(events.values()))
         for name, payload in payloads.items():
             with self.subTest(name):
                 value = found[payload].value()
@@ -98,15 +103,16 @@ class KafkaIngestionTests(unittest.TestCase):
                 self.assertIsNone(found[payload].key())  # key 미지정
 
     def test_log_append_time_timestamp_and_generation_delay(self):
-        payloads = self.sample_payloads()
-        out, found = self.send_and_consume(list(payloads.values()))
+        events = self.sample_events()
+        payloads = {name: payload for name, (payload, _) in events.items()}
+        out, found = self.send_and_consume(list(events.values()))
         for name in ("normal", "health_check"):
             ts_type, ts = found[payloads[name]].timestamp()
             self.assertEqual(ts_type, TIMESTAMP_LOG_APPEND_TIME, name)
-            delay_ms = ts - _event_ms(payloads[name])  # 음수일 수 있어 부호는 단언하지 않는다.
+            delay_ms = ts - _event_ms(events[name][1])  # 음수일 수 있어 부호는 단언하지 않는다.
             self.assertLess(abs(delay_ms), 60_000, f"{name} 지연 {delay_ms}ms")
         # 해석 불가 로그는 지연 계산 대상이 아니다.
-        self.assertIsNone(_event_ms(payloads["malformed"]))
+        self.assertIsNone(_event_ms(events["malformed"][1]))
         # 성공 콜백의 msg.timestamp()도 LogAppendTime이므로 Producer가 지연을 집계한다.
         metrics = out.metrics(detail=True)
         self.assertEqual(metrics["gen_to_kafka_samples"], 2)

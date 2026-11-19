@@ -9,6 +9,7 @@ main.run이 기존 출력 오류와 같은 경로(종료 코드 1)로 처리하�
 import json
 import time
 from collections import Counter
+from functools import partial
 from datetime import datetime, timedelta, timezone
 from typing import Callable, TextIO
 
@@ -39,11 +40,11 @@ def percentiles(counts: Counter) -> dict:
     return result
 
 
-def _event_ms(payload: bytes) -> int | None:
-    """원본의 event_timestamp를 epoch ms로 읽는다. JSON을 해석할 수 없거나 값이 없으면 None."""
+def _event_ms(event_timestamp: str | None) -> int | None:
+    """생성기가 넘긴 event_timestamp 문자열을 epoch ms로 바꾼다. 값이 없거나 해석할 수 없으면 None."""
     try:
-        parsed = datetime.fromisoformat(json.loads(payload)["event_timestamp"])
-    except (ValueError, KeyError, TypeError):
+        parsed = datetime.fromisoformat(event_timestamp)
+    except (ValueError, TypeError):
         return None
     return (parsed - _EPOCH) // _MS
 
@@ -88,7 +89,8 @@ class KafkaOutput:
 
     # --- 콜백 (poll/flush 중 호출된다) ---
 
-    def _on_delivery(self, error: KafkaError | None, msg) -> None:
+    def _on_delivery(self, event_timestamp: str | None, error: KafkaError | None, msg) -> None:
+        """send()가 partial로 event_timestamp를 묶어 등록한다. payload를 다시 파싱하지 않는다."""
         latency = msg.latency()
         if latency is not None:
             rounded = round(latency * 1000, 1)
@@ -103,7 +105,7 @@ class KafkaOutput:
         if ts_type != TIMESTAMP_LOG_APPEND_TIME:
             self.delay_not_append_time += 1
             return
-        event_ms = _event_ms(msg.value())
+        event_ms = _event_ms(event_timestamp)
         if event_ms is None:
             self.delay_unparseable += 1
         else:
@@ -135,13 +137,15 @@ class KafkaOutput:
         self._producer.poll(timeout)
         self._check()
 
-    def send(self, payload: bytes) -> None:
+    def send(self, payload: bytes, event_timestamp: str | None) -> None:
+        """payload를 그대로 큐에 등록한다. event_timestamp는 생성 → Kafka 지연 계산용이며 None이면 해석 불가로 센다."""
         self.generated += 1
         self._check()
         deadline = time.monotonic() + self.config.queue_full_timeout_sec
+        on_delivery = partial(self._on_delivery, event_timestamp)
         while True:
             try:
-                self._producer.produce(self.config.topic, payload, on_delivery=self._on_delivery)
+                self._producer.produce(self.config.topic, payload, on_delivery=on_delivery)
                 self.queued += 1
                 return
             except BufferError:

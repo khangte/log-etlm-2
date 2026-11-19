@@ -39,11 +39,16 @@ PAGE = {
 
 
 class GeneratedEvent(NamedTuple):
-    """kind는 pools.EVENT_KINDS, anomaly는 불량일 때만 pools.ANOMALY_KINDS 중 하나다."""
+    """kind는 pools.EVENT_KINDS, anomaly는 불량일 때만 pools.ANOMALY_KINDS 중 하나다.
+
+    event_timestamp는 payload에 넣은 문자열 그대로다. 생성 → Kafka 지연 계산용이며
+    JSON으로 해석할 수 없는 payload(malformed_json)는 None이다.
+    """
 
     kind: str
     anomaly: str | None
     payload: bytes
+    event_timestamp: str | None
 
 
 def serialize(obj: dict) -> bytes:
@@ -65,9 +70,11 @@ class EventGenerator:
         """설정 비율에 따라 이벤트 유형을 고르고 생성한다."""
         kind = self.rng.choices(pools.EVENT_KINDS, cum_weights=EVENT_CUM_WEIGHTS)[0]
         if kind == "normal_order":
-            return GeneratedEvent(kind, None, serialize(self.order()))
+            doc = self.order()
+            return GeneratedEvent(kind, None, serialize(doc), doc["event_timestamp"])
         if kind == "health_check":
-            return GeneratedEvent(kind, None, serialize(self.health_check()))
+            doc = self.health_check()
+            return GeneratedEvent(kind, None, serialize(doc), doc["event_timestamp"])
         return self.invalid_order(self.rng.choice(pools.ANOMALY_KINDS))
 
     def health_check(self) -> dict:
@@ -131,11 +138,11 @@ class EventGenerator:
         if anomaly == "malformed_json":
             payload = serialize(order)
             # 최종 닫는 중괄호를 '!'로 교체: 길이·UTF-8·한 줄 구조를 유지한 채 파싱만 실패한다.
-            return GeneratedEvent("invalid_order", anomaly, payload[:-1] + b"!")
+            return GeneratedEvent("invalid_order", anomaly, payload[:-1] + b"!", None)
         if anomaly == "missing_order_id":
             del order["properties"]["order_id"]
         elif anomaly == "invalid_amount_type":
             order["properties"]["total_amount"] = "invalid_amount"
         else:
             raise ValueError(f"unknown anomaly: {anomaly}")
-        return GeneratedEvent("invalid_order", anomaly, serialize(order))
+        return GeneratedEvent("invalid_order", anomaly, serialize(order), order["event_timestamp"])

@@ -191,7 +191,7 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
                 event = generator.next_event()
                 serialize_us[(time.perf_counter_ns() - started_ns) // 1000] += 1
                 if kafka:
-                    kafka.send(event.payload)
+                    kafka.send(event.payload, event.event_timestamp)
                 else:
                     out.write(event.payload + b"\n")
                 stats.record(event.kind, event.anomaly, len(event.payload))

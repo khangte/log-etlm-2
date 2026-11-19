@@ -15,7 +15,7 @@ from log_generator.config import ClickHouseConfig, LoadProfile, Segment, load_co
 from log_generator.main import run
 from log_generator.ops_metrics import ProducerStatsWriter, producer_stats_row
 from test_generator import ENV_VALUES
-from test_kafka_producer import make, payload
+from test_kafka_producer import event, make
 
 SCHEMA = Path(__file__).resolve().parents[3] / "infra" / "clickhouse" / "schema.sql"
 
@@ -54,13 +54,13 @@ class ProducerStatsRowTests(unittest.TestCase):
     def test_interval_metrics_are_per_interval_and_reset(self):
         out, producer, _ = make()
         for ms in (100, 200):
-            out.send(payload(ms))
+            out.send(*event(ms))
         out.sample_queue()
         out.poll()
         first = out.interval_metrics()
         self.assertEqual((first["acked"], first["failed"], first["queue_len_max"]), (2, 0, 2))
         self.assertEqual(first["gen_to_kafka_ms"], Counter({900: 1, 800: 1}))
-        out.send(payload(500))
+        out.send(*event(500))
         out.poll()
         second = out.interval_metrics()
         self.assertEqual((second["acked"], second["gen_to_kafka_ms"].total()), (1, 1))

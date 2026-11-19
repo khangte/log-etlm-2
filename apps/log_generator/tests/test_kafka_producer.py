@@ -2,14 +2,19 @@
 
 import io
 import json
+import random
 import signal
 import unittest
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from confluent_kafka import KafkaError
 
+from log_generator import pools
+
 from log_generator.config import KafkaConfig, load_config
+from log_generator.generator import EventGenerator
 from log_generator.main import main, run
 from log_generator.outputs.kafka_producer import KafkaOutput, KafkaOutputError, percentiles
 from test_generator import ENV_VALUES
@@ -19,9 +24,19 @@ APPEND = 2  # TIMESTAMP_LOG_APPEND_TIME
 CREATE = 1  # TIMESTAMP_CREATE_TIME
 
 
+def timestamp(event_ms: int) -> str:
+    """epoch 기준 event_ms를 생성기와 같은 밀리초 UTC 문자열로 만든다(60초 미만만)."""
+    return "1970-01-01T00:00:%06.3fZ" % (event_ms / 1000)
+
+
 def payload(event_ms: int) -> bytes:
     # 밀리초 UTC 문자열 형식의 event_timestamp만 필요한 최소 페이로드
-    return json.dumps({"event_timestamp": "1970-01-01T00:00:%06.3fZ" % (event_ms / 1000)}).encode()
+    return json.dumps({"event_timestamp": timestamp(event_ms)}).encode()
+
+
+def event(event_ms: int) -> tuple[bytes, str]:
+    """send()에 넘길 (payload, event_timestamp) 쌍. 생성기처럼 payload 안의 문자열과 같은 값을 넘긴다."""
+    return payload(event_ms), timestamp(event_ms)
 
 
 class FakeMsg:
@@ -88,7 +103,7 @@ class KafkaOutputTests(unittest.TestCase):
     def test_sends_original_bytes_without_key_or_lf_and_sets_producer_config(self):
         out, producer, _ = make()
         data = b'{"broken":' + bytes([0xFF, 0xFE])  # 불량 bytes도 그대로 보낸다.
-        out.send(data)
+        out.send(data, None)
         topic, value, kwargs = producer.produced[0]
         self.assertEqual((topic, value), ("raw.ecommerce.orders.v1", data))
         self.assertEqual(set(kwargs), {"on_delivery"})  # key·headers·timestamp 미지정
@@ -102,8 +117,8 @@ class KafkaOutputTests(unittest.TestCase):
     def test_success_counts_and_latency_metrics(self):
         out, _, _ = make()
         for ms in (100, 200, 400):
-            out.send(payload(ms))
-        out.send(b"not json")
+            out.send(*event(ms))
+        out.send(b"not json", None)
         self.assertEqual((out.generated, out.queued, out.acked), (4, 4, 0))  # 큐 등록은 성공이 아니다.
         out.poll()
         out.flush()
@@ -117,8 +132,8 @@ class KafkaOutputTests(unittest.TestCase):
 
     def test_negative_delay_is_kept_not_clamped(self):
         out, producer, _ = make()
-        out.send(payload(1500))  # append(1000) - event(1500) = -500
-        out.send(payload(900))
+        out.send(*event(1500))  # append(1000) - event(1500) = -500
+        out.send(*event(900))
         out.flush()
         m = out.metrics(detail=True)
         self.assertEqual((m["gen_to_kafka_negative"], m["gen_to_kafka_min"]), (1, -500))
@@ -126,17 +141,17 @@ class KafkaOutputTests(unittest.TestCase):
 
     def test_non_log_append_time_timestamp_is_not_used_for_delay(self):
         out, _, _ = make()
-        out.send(payload(0))
+        out.send(*event(0))
         msg = FakeMsg(payload(0), ts_type=CREATE, ts=5)
-        out._on_delivery(None, msg)
+        out._on_delivery(timestamp(0), None, msg)
         m = out.metrics(detail=True)
         self.assertEqual(m["timestamp_not_log_append_time"], 1)
         self.assertEqual(m["gen_to_kafka_samples"], 0)
 
     def test_queue_full_polls_until_space_then_sends(self):
         out, producer, _ = make(capacity=1)
-        out.send(payload(1))
-        out.send(payload(2))  # 큐 포화 -> poll(0.1)로 비운 뒤 재시도
+        out.send(*event(1))
+        out.send(*event(2))  # 큐 포화 -> poll(0.1)로 비운 뒤 재시도
         self.assertEqual(len(producer.produced), 2)
         self.assertEqual((out.generated, out.queued), (2, 2))
 
@@ -144,40 +159,40 @@ class KafkaOutputTests(unittest.TestCase):
         out, producer, _ = make(capacity=1)
         producer.deliver_on_flush = False
         producer.poll = lambda timeout=0: None  # 큐가 영원히 비지 않는다.
-        out.send(payload(1))
+        out.send(*event(1))
         clock = iter(range(0, 1000, 10))  # 호출마다 10초 경과
         with patch("log_generator.outputs.kafka_producer.time") as fake_time:
             fake_time.monotonic.side_effect = lambda: next(clock)
             with self.assertRaisesRegex(KafkaOutputError, "queue full"):
-                out.send(payload(2))
+                out.send(*event(2))
         self.assertEqual((out.generated, out.queued), (2, 1))  # 큐 등록 실패는 queued에 포함하지 않는다.
 
     def test_delivery_failure_aborts_on_next_call(self):
         error = KafkaError(KafkaError._MSG_TIMED_OUT, "timed out")
         out, _, _ = make(result=error)
-        out.send(payload(1))
+        out.send(*event(1))
         with self.assertRaisesRegex(KafkaOutputError, "delivery failed"):
             out.poll()
         self.assertEqual((out.failed, out.acked), (1, 0))
         with self.assertRaises(KafkaOutputError):
-            out.send(payload(2))
+            out.send(*event(2))
 
     def test_fatal_error_cb_aborts_and_non_fatal_only_counts(self):
         out, producer, err = make()
         error_cb = producer.conf["error_cb"]
         error_cb(KafkaError(KafkaError._ALL_BROKERS_DOWN, "all down"))
-        out.send(payload(1))  # fatal이 아니므로 계속 전송한다.
+        out.send(*event(1))  # fatal이 아니므로 계속 전송한다.
         self.assertEqual(out.client_errors, 1)
         error_cb(KafkaError(KafkaError._FATAL, "fenced", fatal=True))
         with self.assertRaisesRegex(KafkaOutputError, "fatal error"):
-            out.send(payload(2))
+            out.send(*event(2))
         self.assertEqual(sum('"fatal": true' in line for line in err.getvalue().splitlines()), 1)
 
     def test_flush_with_remaining_messages_is_failure_with_counts(self):
         out, producer, _ = make()
         producer.deliver_on_flush = False
-        out.send(payload(1))
-        out.send(payload(2))
+        out.send(*event(1))
+        out.send(*event(2))
         with self.assertRaisesRegex(KafkaOutputError, "2 messages undelivered"):
             out.flush()
         self.assertEqual(out.metrics()["undelivered"], 2)
@@ -195,6 +210,47 @@ class KafkaOutputTests(unittest.TestCase):
         ordered = sorted(values)
         expected = {f"p{q}": ordered[-(-len(values) * q // 100) - 1] for q in (50, 95, 99)}
         self.assertEqual(percentiles(Counter(values)), expected)
+
+
+class EventTimestampHandoffTests(unittest.TestCase):
+    """delivery 콜백이 payload를 다시 파싱하지 않아도 생성 → Kafka 지연 집계가 변경 전과 같은지 확인한다."""
+
+    @staticmethod
+    def old_event_ms(value: bytes) -> int | None:
+        """변경 전 방식: 메시지 값을 json.loads로 파싱해 event_timestamp를 읽는다."""
+        try:
+            parsed = datetime.fromisoformat(json.loads(value)["event_timestamp"])
+        except (ValueError, KeyError, TypeError):
+            return None
+        return (parsed - datetime(1970, 1, 1, tzinfo=timezone.utc)) // timedelta(milliseconds=1)
+
+    def events(self):
+        """고정 seed 무작위 이벤트에 불량 3종 강제 생성을 더해 모든 유형을 포함한다."""
+        gen = EventGenerator(random.Random(7), pools.build_user_pool(10))
+        forced = [gen.invalid_order(anomaly) for anomaly in pools.ANOMALY_KINDS]
+        return [gen.next_event() for _ in range(3000)] + forced
+
+    def test_event_timestamp_matches_payload(self):
+        for e in self.events():
+            if e.anomaly == "malformed_json":
+                self.assertIsNone(e.event_timestamp)
+            else:
+                self.assertEqual(e.event_timestamp, json.loads(e.payload)["event_timestamp"])
+
+    def test_delay_histogram_matches_payload_parsing(self):
+        out, producer, _ = make()
+        events = self.events()
+        for e in events:
+            out.send(e.payload, e.event_timestamp)
+        out.flush()
+        append_ms = 1000  # FakeProducer의 성공 콜백 LogAppendTime
+        expected = Counter(append_ms - ms for ms in map(self.old_event_ms, (e.payload for e in events))
+                           if ms is not None)
+        self.assertEqual(out.append_delay_ms, expected)
+        malformed = sum(e.anomaly == "malformed_json" for e in events)
+        self.assertGreater(malformed, 1)
+        self.assertEqual(out.delay_unparseable, malformed)
+        self.assertEqual(out.delay_unparseable + expected.total(), len(events))
 
 
 class RunWithKafkaTests(unittest.TestCase):
