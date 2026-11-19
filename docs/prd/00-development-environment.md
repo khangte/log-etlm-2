@@ -31,6 +31,8 @@ swap=4GB
 
 메모리는 필요에 따라 사용하며 12GB는 상한이다. swap 4GB는 디스크를 사용하는 보조 공간이다. 성능 측정 시 swap 입출력과 Windows의 메모리 사용량도 확인한다.
 
+시간 동기는 WSL/Hyper-V 쪽 동기 하나만 사용한다. Ubuntu의 `systemd-timesyncd`는 비활성화한다(`sudo systemctl disable --now systemd-timesyncd`). 두 동기가 함께 켜져 있으면 서로 반대로 보정해 단조 시계 속도가 수천 ppm까지 흔들린다([WSL 시계 차이 조사](04-clickhouse-storage.md#wsl-시계-차이-조사-2026-11-18)). 장시간 측정 전에는 Windows에서 `w32tm /query /status`로 동기 상태를 확인하고, 미동기면 `w32tm /resync`를 실행한다.
+
 ## Docker 실행 방식
 
 - Docker Desktop에서 WSL2 백엔드를 사용하고, 현재 Ubuntu 배포판의 WSL Integration을 활성화한다.

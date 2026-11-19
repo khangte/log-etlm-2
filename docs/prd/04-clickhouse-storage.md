@@ -1,6 +1,6 @@
 # ClickHouse 적재
 
-- 상태: 구현 중 (ClickHouse 서비스·스키마·계정, Spark JDBC 적재, Spark·생성기 운영 지표 기록 구현·1차 검증, 5,000 EPS 지속 부하(12분·25분)·장애 주입 측정 완료, DLQ 쓰기 실패 주입 부분 통과 후 멈춤 감시·자동 재시작 구현·검증. 남은 항목은 [측정 후 남은 작업](#측정-후-남은-작업-2026-11-18))
+- 상태: 완료 (ClickHouse 서비스·스키마·계정, Spark JDBC 적재, Spark·생성기 운영 지표 기록 구현·검증, 5,000 EPS 지속 부하(12분·25분)·장애 주입 측정 완료, DLQ 쓰기 실패 주입 부분 통과 후 멈춤 감시·자동 재시작 구현·검증, WSL 시계 대응(timesyncd 비활성화) 적용·검증. [측정 후 남은 작업](#측정-후-남은-작업-2026-11-18) 모두 종료)
 - 적용 범위: 제품 v1
 
 ## 목표
@@ -644,7 +644,7 @@ JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한�
 ### 측정 후 남은 작업 (2026-11-18)
 
 - 대시보드 조회 반영: backlog 해석 제약, 빈 `latest_offsets` 처리, INSERT 실패 필터, 진행 행 공백·Spark 재시작 횟수 경보(5단계 Grafana). → 5단계에서 반영·검증([Grafana 구현 기록](05-grafana-dashboard.md#구현-기록)).
-- WSL 시계 대응 결정(Windows 시간 동기는 2026-11-18 15:33 `w32tm /resync`로 복구, 이후 측정에서 보정 비율 k로 효과 확인): [WSL 시계 차이 조사](#wsl-시계-차이-조사-2026-11-18)의 권고 중 적용할 것(Windows 시간 동기 복구, timesyncd 비활성화, 생성기 `CLOCK_MONOTONIC_RAW` 전환)을 정한다. 시스템 설정 변경이므로 사용자가 결정한다.
+- WSL 시계 대응(종료, 2026-11-19): Windows 시간 동기 복구(2026-11-18 15:33 `w32tm /resync`)와 `systemd-timesyncd` 비활성화를 적용했다. 생성기 `CLOCK_MONOTONIC_RAW` 전환은 적용하지 않는다. 근거는 [timesyncd 비활성화 검증](#timesyncd-비활성화-검증-2026-11-19)이다.
 
 ### WSL 시계 차이 조사 (2026-11-18)
 
@@ -658,12 +658,34 @@ JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한�
   - Windows 쪽 동기: tick을 바꾸는 주체는 확인하지 못했다. timesyncd 소스에는 `ADJ_TICK`이 없고, 메인라인 `hv_utils`는 step(`do_settimeofday64`)만 한다. 4~8초 주기가 Hyper-V TimeSync 샘플 주기(약 5초)와 맞아 WSL 커널 또는 WSL init의 동기 처리로 추정한다.
 - 기준이 어긋난 이유: Windows가 시간 동기를 잃었다. `w32tm /query /status`는 Leap 3(미동기), 마지막 성공 동기 09:39:24, 루트 분산 8.5초다. `w32tm /stripchart` 결과 Windows는 time.google.com보다 약 0.29초 앞선다. Linux realtime도 Windows를 따라 NTP 서버들보다 0.17~0.34초 앞선다(SNTP 질의). 계단 시작(09:38)과 Windows 마지막 동기 시각이 겹친다. 08:58·10:15에 `hv_utils: TimeSync IC` 재등록(호스트 일시 정지·재개 흔적)이 있다.
 - 측정 결과와의 관계: 12분 측정 때는 step이 약 1.3초로 지금(160ms)보다 커서 단조 시계가 4.3% 빨랐다. 25분 측정 때는 반대로 0.56% 느렸다. 같은 줄다리기가 시점마다 다른 균형을 보인 것으로 해석한다. 다만 당시 tick 값은 기록이 없어 직접 확인하지 못했다.
-- 남은 가설: tick을 조정하는 주체(WSL 커널 패치 또는 WSL init)와 160ms step의 주체. timesyncd를 멈추면 톱니가 사라지는지는 설정 변경이라 확인하지 않았다.
+- 남은 가설: tick을 조정하는 주체(WSL 커널 패치 또는 WSL init)와 160ms step의 주체. timesyncd를 멈추면 톱니가 사라지는지는 설정 변경이라 확인하지 않았다. → 2026-11-19 [timesyncd 비활성화 검증](#timesyncd-비활성화-검증-2026-11-19)에서 확인했다. 줄다리기는 사라졌고, 30초 step은 WSL/Hyper-V 쪽 동기가 만드는 것으로 남았다(약 2.5ms).
 - 권고(적용은 사용자 결정):
   - 측정 시간 기준: 생성기 속도 제어·경과 측정은 `CLOCK_MONOTONIC_RAW`(`time.clock_gettime(time.CLOCK_MONOTONIC_RAW)`)를 쓴다. 관찰에서 Windows QPC와 1ppm 안으로 맞았고 NTP·tick 보정을 받지 않는다. 현재 생성기는 `time.monotonic()`(`CLOCK_MONOTONIC`)을 쓴다.
   - 분석: 시계를 고치기 전 측정은 지금처럼 실제 경과로 비율 k를 구해 보정한다. realtime은 평균 속도는 맞지만 step(지금 ±160ms, 이전 1.3초)이 있어 1초 단위 구간 경계와 Spark·ClickHouse 쪽 시각 차이 지표가 그만큼 흔들린다.
   - 근본 해결: Windows 시간 동기를 복구한다(`w32tm /resync`). Ubuntu WSL 문서는 24.04 이하에서 Hyper-V 동기와 충돌을 피하려고 timesyncd 비활성화를 권장한다. 둘 다 적용하면 줄다리기가 없어진다.
 - 원시 샘플은 저장소에 두지 않았다(세션 임시 디렉터리).
+
+### timesyncd 비활성화 검증 (2026-11-19)
+
+**판정: 통과.** `sudo systemctl disable --now systemd-timesyncd` 적용 후 커널 PLL 보정이 사라지고 tick이 고정되어 단조 시계 오차가 +65ppm(0.0065%)으로 줄었다. 5,000 EPS 측정에서 무시할 수 있는 크기이므로 생성기 시계는 `time.monotonic()`을 유지한다.
+
+- 방법: WSL Ubuntu에서 2초 간격으로 `CLOCK_REALTIME`·`CLOCK_MONOTONIC`·`CLOCK_MONOTONIC_RAW`와 `adjtimex`(읽기 전용) 값을 기록하고, 30초마다 time.google.com에 SNTP 질의를 했다. 기준은 `CLOCK_MONOTONIC_RAW`다(2026-11-18 관찰에서 Windows QPC와 0ppm).
+- 결과:
+
+| 항목 | 2026-11-18 조사 | 비활성화 전(3분) | 비활성화 직후(5분) | 안정 후(5분) |
+| --- | ---: | ---: | ---: | ---: |
+| `CLOCK_MONOTONIC` 대비 RAW | +5,300ppm | +575ppm | +324ppm | +65ppm |
+| adjtimex tick | 10,138~10,168 | 10,007~10,018 | 9,818~10,024 | 10,001 고정 |
+| 커널 PLL offset·status | −0.3초, `STA_PLL` | −22ms, `0x2001` | 0, `0x0` | 0, `0x0` |
+| realtime 30초 주기 step | 약 160ms | 약 −22ms | −52ms 1회 | 약 −2.5ms |
+| NTP 대비 realtime(SNTP, 서버−로컬) | −0.17~−0.34초 | −112~+31ms | −47~+9ms | −30~+10ms |
+
+- 30초 주기 realtime step은 timesyncd를 멈춘 뒤에도 남았다(`systemd-resolved`의 `Clock change detected`가 30초마다 계속 기록됨). step의 주체는 timesyncd가 아니라 WSL/Hyper-V 쪽 동기다. 크기가 약 2.5ms로 줄어 1초 구간 지표에 주는 영향은 작다.
+- 비활성화 직후 5분은 timesyncd가 남긴 보정이 풀리는 과도 구간이다. 판정은 안정 후 값으로 한다.
+- SNTP 값은 왕복 지연 약 270ms 때문에 ±수십 ms 흔들린다. 오차 범위 판단용이지 정밀 기준이 아니다.
+- 한계: 측정 시간은 총 13분이다. Windows 시간 동기가 다시 끊기는 경우와 WSL 재시작 후 상태는 확인하지 않았다. Windows 동기가 끊기면 realtime이 Windows를 따라 NTP와 벌어지므로 장시간 측정 전에는 `w32tm /query /status`로 동기 상태를 확인한다.
+- 되돌리기: `sudo systemctl enable --now systemd-timesyncd`
+- 운영 환경은 이 문제와 무관하다. 운영 서버는 시간 동기 주체를 하나(예: chrony)만 둔다.
 
 ## 완료 기준
 
