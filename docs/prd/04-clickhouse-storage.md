@@ -1,6 +1,6 @@
 # ClickHouse 적재
 
-- 상태: 완료 (ClickHouse 서비스·스키마·계정, Spark JDBC 적재, Spark·생성기 운영 지표 기록 구현·검증, 5,000 EPS 지속 부하(12분·25분)·장애 주입 측정 완료, DLQ 쓰기 실패 주입 부분 통과 후 멈춤 감시·자동 재시작 구현·검증, WSL 시계 대응(timesyncd 비활성화) 적용·검증. [측정 후 남은 작업](#측정-후-남은-작업-2026-11-18) 모두 종료)
+- 상태: 완료 (ClickHouse 서비스·스키마·계정, Spark JDBC 적재, Spark·생성기 운영 지표 기록 구현·검증, 5,000 EPS 지속 부하(12분·25분)·장애 주입 측정 완료, DLQ 쓰기 실패 주입 부분 통과 후 멈춤 감시·자동 재시작 구현·검증, WSL 시계 대응(timesyncd 비활성화) 적용·검증. 호스트 멈춤 기록·`asynchronous_metric_log` 추가 구현·검증(2026-11-19). [측정 후 남은 작업](#측정-후-남은-작업-2026-11-18) 모두 종료)
 - 적용 범위: 제품 v1
 
 ## 목표
@@ -186,6 +186,7 @@ Spark 변환 구현 전에 조회 요구사항을 바탕으로 한 행의 의미
 | 관리자(`CLICKHOUSE_USER`) | 접근 관리 포함 전체 | `clickhouse-init`과 수동 점검 |
 | `spark_writer` | `silver.order_events`·`ops.spark_batch_attempts`·`ops.spark_query_progress`에 INSERT·SELECT | Spark JDBC 적재와 드라이버 지표 |
 | `generator_writer` | `ops.producer_stats`에 INSERT | 호스트의 로그 생성기 |
+| `monitor_writer` | `ops.host_stalls`에 INSERT | `host-monitor` 컨테이너([호스트 멈춤 기록](#호스트-멈춤-기록)) |
 | `grafana_reader` | `gold.*`·`ops.*`·`system.query_log`·`system.part_log`에 SELECT. `readonly = 1`, `max_execution_time`만 `CHANGEABLE_IN_READONLY` | Grafana 데이터 소스 |
 | `gold_definer` | `silver.order_events`에 SELECT. `HOST NONE`으로 로그인 불가 | Gold 뷰의 `DEFINER` |
 
@@ -207,14 +208,17 @@ Spark 변환 구현 전에 조회 요구사항을 바탕으로 한 행의 의미
 | --- | --- | --- | --- |
 | `clickhouse` | 2 | 4g | `ulimits.nofile` 262144 |
 | `grafana` | 0.5 | 512m | - |
+| `host-monitor` | 0.25 | 256m | - |
 
 - 선택 근거:
   - 예산: Kafka UI를 제외하면 남은 자원은 CPU 3개·메모리 약 7GiB다. ClickHouse에 CPU 2개를 주면 ClickHouse가 병합·`FINAL` 조회로 포화돼도 호스트의 로그 생성기·Grafana가 CPU 1개를 쓸 수 있다. `cpus`는 예약이 아닌 상한이므로 ClickHouse가 한가할 때는 다른 프로세스가 그 CPU를 쓴다.
   - 메모리 4g: 적재 블록·병합·`FINAL` 조회가 쓰는 메모리다. 남은 약 3GiB는 Grafana 512MiB와 생성기·WSL 자체가 쓴다.
   - `nofile` 262144: [Docker Hub 이미지 안내](https://hub.docker.com/r/clickhouse/clickhouse-server)의 실행 예시 값이다. 1시간 파티션 25개와 컬럼별 파일로 열린 파일 수가 많다.
   - Grafana 0.5·512MiB: 1분·5초 갱신 패널의 쿼리 전송과 렌더링만 하며, 계산은 ClickHouse가 한다. 5단계에서 실측해 조정한다.
+  - `host-monitor` 0.25·256MiB: 평소에는 1초마다 `sleep`만 하는 셸 루프다. 멈춤을 감지했을 때만 `clickhouse-client`를 띄우며, 256MiB는 이 클라이언트 실행 여유다.
 - 저메모리 설정: [ClickHouse 운영 팁](https://clickhouse.com/docs/operations/tips)은 메모리 16GB 미만에서 기본값이 메모리 예외를 일으킬 수 있다고 안내한다. `infra/clickhouse/config.d/`에 아래를 적용한다.
-  - `metric_log`, `trace_log`, `text_log`, `asynchronous_metric_log`를 끈다. 대시보드가 쓰는 `query_log`·`part_log`는 유지한다.
+  - `metric_log`, `trace_log`, `text_log`를 끈다. 대시보드가 쓰는 `query_log`·`part_log`는 유지한다.
+  - `asynchronous_metric_log`는 켜고 TTL `event_date + INTERVAL 3 DAY DELETE`를 둔다(2026-11-19 변경). 처음에는 저메모리 설정으로 껐지만, 2026-11-19 01:50(KST) 지연 급증을 조사할 때 그 시각의 CPU·메모리·IO 수치가 없어 원인을 좁히지 못했다([호스트 멈춤 기록](#호스트-멈춤-기록)). 이 테이블은 서버의 비동기 지표(`OSMemoryAvailable`, `LoadAverage1`, `OSIOWaitTimeNormalized` 등)를 초 단위로 남긴다. 컨테이너 안에서 읽는 `/proc` 값이라 WSL VM 전체 수치다. 보존 기간은 `query_log`와 같은 이유로 3일이다. 하루 행 수와 디스크 사용량은 켠 뒤 실측해 [구현 기록](#구현-기록)에 남긴다.
   - `query_log`·`part_log`에 TTL `event_date + INTERVAL 3 DAY DELETE`를 둔다. 기본값에는 TTL이 없어 무기한 쌓인다. 대시보드(15분)·경보(5분)는 24시간이면 충분하지만, 지난 측정을 다음 날 다시 조사할 수 있게 3일로 둔다. 2026-11-18 부하 측정 하루분이 두 테이블 합계 약 23MiB였으므로 3일분도 작다. `ops`·`silver`는 24시간이라 24시간이 지난 행은 이 두 테이블만으로 본다.
   - TTL을 바꾸면 ClickHouse가 기동 시 기존 테이블을 `query_log_N`·`part_log_N`으로 이름을 바꾸고 새 테이블을 만든다. 옛 테이블은 자동 삭제되지 않으므로 확인 후 직접 지운다.
   - mark cache를 512MiB로 줄인다. 문서는 약 500MB까지 줄일 수 있다고 한다.
@@ -371,13 +375,14 @@ B의 제약은 불변 전제 의존이다. 같은 ID에 다른 `event_timestamp`
   - 근거 3: [ClickHouse INSERT 전략 권장](https://clickhouse.com/docs/best-practices/selecting-an-insert-strategy)은 동기 INSERT를 1,000행 이상, 초당 1회 수준으로 묶도록 한다. 클라이언트에서 묶을 수 없으면 `async_insert=1`과 `wait_for_async_insert=1`을 강하게 권장한다. 지표는 5초마다 1~2행인 작은 INSERT이므로 서버 측 묶음을 사용한다. `wait_for_async_insert=0`은 오류를 클라이언트가 알 수 없어 사용하지 않는다.
   - 비교에서 제외한 대안: 지표 Kafka 토픽 → ClickHouse Kafka 엔진은 ClickHouse 장애 중에도 지표를 보존하는 실무 구조다. 하지만 토픽·Kafka 엔진 테이블·MV가 추가되고 ClickHouse의 소비 부하가 남은 CPU 예산을 쓴다. v1은 지표 손실을 허용하므로 도입하지 않는다.
   - 배치당 비용은 실측하지 않은 추정이다. 4단계에서 지표 INSERT 시간을 콜백 시간과 함께 기록한다.
-- **운영 지표 테이블 구조:** `ops` 데이터베이스에 원천별 테이블 3개를 둔다. 모두 `MergeTree`, 파티션 없음, 행 단위 TTL 24시간이다.
+- **운영 지표 테이블 구조:** `ops` 데이터베이스에 원천별 테이블 4개를 둔다. 모두 `MergeTree`, 파티션 없음이다. 행 단위 TTL은 24시간이고, `ops.host_stalls`만 3일이다.
 
   | 테이블 | 행 단위 | 쓰는 곳 |
   | --- | --- | --- |
   | `ops.producer_stats` | 생성기 1초 구간당 1행 | 호스트의 로그 생성기 |
   | `ops.spark_batch_attempts` | `foreachBatch` 콜백 시도당 1행. 실패 포함 | Spark 드라이버 |
   | `ops.spark_query_progress` | `onQueryProgress` 배치당 1행 | Spark 드라이버 리스너 |
+  | `ops.host_stalls` | 감지한 호스트 멈춤 1건당 1행. TTL 3일 | `host-monitor` 컨테이너([호스트 멈춤 기록](#호스트-멈춤-기록)) |
 
   - 목적: 병목이 생겼을 때 스택의 어느 구간이 원인인지 대시보드로 가린다. 구간마다 소요시간과 그 구간 앞에 쌓이는 대기열을 함께 기록한다. 처리량이 입력보다 낮은 구간이 있으면 그 앞의 대기열이 계속 늘어난다.
 
@@ -407,6 +412,31 @@ B의 제약은 불변 전제 의존이다. 같은 ID에 다른 `event_timestamp`
   - 선택 근거: 수집 방식이 Spark 지표와 하나로 통일된다. 운영 대시보드의 앞 구간(생성기·Producer)을 측정 불가로 남기지 않는다.
   - 비교한 대안: 4단계 범위에서 제외하면 범위는 작지만 운영 대시보드 앞 구간이 비어 있다. 지표 Kafka 토픽 경유는 위 지표 INSERT 방식에서 제외한 구조를 생성기에만 도입하는 셈이다.
   - 제약: 구간별 분위수는 해당 구간 값으로만 표시하고 여러 구간을 평균·합산하지 않는다. 생성기는 호스트에서 실행하므로 ClickHouse HTTP 포트를 `127.0.0.1`에만 게시한다.
+
+#### 호스트 멈춤 기록
+
+- 배경: 2026-11-19 01:50(KST)에 생성기 ACK p99 13.6초, Spark 트리거 18초 급증이 있었다. 조사 결과는 다음과 같았다.
+  - Kafka 로그 시각(`16:50:41.492` UTC)과 docker 수신 시각(`16:50:46.64`)이 약 5초 벌어졌다. 같은 시각 ClickHouse 서버 로그에도 공백이 있었다. 두 컨테이너가 동시에 멈춘 것이므로 WSL VM 전체가 멈춘 것이다.
+  - 멈춤 사이 Kafka controller heartbeat가 timeout 났고, `__consumer_offsets` 코디네이터가 epoch 15에서 16으로 다시 올라오면서 지연이 길어졌다.
+  - 원인(CPU 경합·메모리 회수·IO)은 확정하지 못했다. 그 시각의 자원 수치가 없었고, Windows 이벤트 로그(System·Application·Hyper-V·Kernel-Power)에도 단서가 없었다. 커널 OOM 기록과 컨테이너 재시작은 없었다.
+- 요구사항: VM 멈춤을 그 순간에 직접 기록하고, 멈춤 직전의 CPU·메모리·IO 압박을 함께 남긴다.
+- 구현: Compose 서비스 `host-monitor`가 1초마다 벽시계(`date +%s%N`)를 읽는다. 직전 틱과의 간격이 `HOST_STALL_THRESHOLD_MS`(기본 2000ms) 이상이면 1행을 `ops.host_stalls`에 INSERT한다.
+  - INSERT는 백그라운드로 실행해 루프가 ClickHouse 응답을 기다리느라 다음 틱을 놓치지 않게 한다. 같은 내용을 stdout에도 쓴다. ClickHouse가 같이 멈춰 INSERT가 실패해도 `docker logs host-monitor`로 대조할 수 있다.
+  - 이미지는 이미 받아 둔 `clickhouse/clickhouse-server`를 재사용한다. bash, GNU `date`, `clickhouse-client`가 들어 있어 새 이미지가 필요 없다.
+  - 계정은 [계정과 권한](#계정과-권한)의 `monitor_writer`를 쓴다.
+- `ops.host_stalls` 컬럼:
+  - `detected_at DateTime64(3, 'UTC')`: 멈춤 뒤 처음 깨어난 시각
+  - `gap_ms UInt32`: 직전 틱과의 간격
+  - `cpu_some_avg10`·`memory_some_avg10`·`memory_full_avg10`·`io_some_avg10`·`io_full_avg10 Float64`: 깨어난 직후 읽은 `/proc/pressure/*`의 `avg10`(직전 10초 중 대기한 비율 %). 멈춤 직전 구간을 덮는다.
+  - `mem_available_mb UInt32`: `/proc/meminfo`의 `MemAvailable`
+  - `load1 Float64`: `/proc/loadavg`의 1분 평균
+  - `ORDER BY detected_at`, TTL 3일. 행이 드물어 파티션을 두지 않는다.
+- 판정: CPU some이 높고 메모리가 낮으면 CPU 경합, memory full이 높으면 메모리 회수 정체, io full이 높으면 디스크다. 세 값이 모두 낮은데 멈췄다면 VM 밖(Hyper-V 스케줄링·Windows)이다. 이때는 `asynchronous_metric_log`의 앞뒤 추이와 Windows 이벤트 로그를 함께 본다.
+- 선택 근거: PSI와 meminfo는 컨테이너 안에서도 VM 전체 값이다. 따라서 별도 호스트 에이전트 없이 Compose 서비스 하나로 기록할 수 있다. 멈춤 1건당 1행이라 저장 부담이 없다.
+- 비교한 대안:
+  - `asynchronous_metric_log`만 사용: 자원 추이는 남지만, 멈춤 자체는 행 간격 공백으로 거꾸로 추정해야 한다. ClickHouse가 같이 멈추면 그 구간 값도 없다.
+  - 호스트 systemd 서비스: Compose 밖이라 `docker compose up`으로 재현되지 않는다.
+- 제약: 감지 하한은 약 1초다. 그보다 짧은 멈춤과 VM 밖의 원인은 이 기록만으로 구분하지 않는다. Grafana 패널·경보는 이번 범위에 넣지 않는다.
 
 JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한다. Spark 측 action 계측만으로 요청별 INSERT 시간을 측정했다고 간주하지 않는다. 요청별 시간은 ClickHouse `system.query_log`의 서버 측 처리시간으로 측정하며, 네트워크·클라이언트 대기는 포함하지 않는다.
 
@@ -686,6 +716,22 @@ JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한�
 - 한계: 측정 시간은 총 13분이다. Windows 시간 동기가 다시 끊기는 경우와 WSL 재시작 후 상태는 확인하지 않았다. Windows 동기가 끊기면 realtime이 Windows를 따라 NTP와 벌어지므로 장시간 측정 전에는 `w32tm /query /status`로 동기 상태를 확인한다.
 - 되돌리기: `sudo systemctl enable --now systemd-timesyncd`
 - 운영 환경은 이 문제와 무관하다. 운영 서버는 시간 동기 주체를 하나(예: chrony)만 둔다.
+
+### 호스트 멈춤 기록 구현 검증 (2026-11-19)
+
+[호스트 멈춤 기록](#호스트-멈춤-기록)과 `asynchronous_metric_log` 켜기를 적용·확인했다. 파이프라인(Spark·생성기)이 멈춘 상태에서 확인했다.
+
+- 적용: ClickHouse 설정 파일을 바꾼 뒤 `docker compose restart clickhouse`는 실패했다(`error mounting ... low-memory.xml ... no such file or directory`). Docker Desktop이 파일 단위 bind mount의 이전 파일을 잡고 있었기 때문이다. `docker compose up -d --force-recreate clickhouse`로 재생성하면 적용된다. 데이터는 볼륨에 있어 유지됐다(`silver.order_events` 39,226,433행).
+- `asynchronous_metric_log`:
+  - 테이블 TTL이 `event_date + toIntervalDay(3)`로 생성됐다.
+  - 지표 216개가 초마다 기록된다. 하루 약 1,870만 행이다.
+  - 첫 25,515행이 20.83KiB(행당 0.84B)였다. 이 값으로 하루 약 15MiB, 3일 약 45MiB로 추정한다. 몇 분 분량으로 낸 초기 추정이라 하루 운영 후 다시 잰다.
+  - `PSI_CPU_some`·`PSI_MEM_full`·`PSI_IO_full` 등 PSI 누적값도 포함돼, 멈춤 앞뒤 압박 추이를 이 테이블로도 볼 수 있다.
+- `host-monitor`:
+  - `docker pause`로 컨테이너를 4초 얼린 뒤 풀었더니 `gap_ms` 4669인 1행이 `ops.host_stalls`에 들어갔다. PSI·`mem_available_mb`·`load1` 값도 채워졌다.
+  - `detected_at`은 UTC로 저장된다.
+  - 평상시 사용량은 메모리 2.0MiB, CPU 0.27%다.
+- 확인하지 않은 것: 실제 VM 멈춤(VM 전체 정지)에서의 감지, 부하 중 오탐 여부. 다음 지속 부하 측정에서 `ops.host_stalls`를 함께 확인한다.
 
 ## 완료 기준
 

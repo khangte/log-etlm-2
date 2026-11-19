@@ -70,7 +70,7 @@ DEFINER = gold_definer SQL SECURITY DEFINER AS
 SELECT event_id, event_timestamp, kafka_append_timestamp, spark_processed_at, spark_run_id, spark_batch_id
 FROM silver.order_events;
 
--- 운영 지표: 원천별 테이블 3개. 분위수 건수가 0이면 측정 불가이며 분위수 값은 0으로 둔다.
+-- 운영 지표: 원천별 테이블 4개. 분위수 건수가 0이면 측정 불가이며 분위수 값은 0으로 둔다.
 
 -- 로그 생성기 1초 구간당 1행.
 CREATE TABLE IF NOT EXISTS ops.producer_stats
@@ -151,3 +151,21 @@ CREATE TABLE IF NOT EXISTS ops.spark_query_progress
 ENGINE = MergeTree
 ORDER BY trigger_at
 TTL toDateTime(trigger_at) + INTERVAL 24 HOUR;
+
+-- 호스트(WSL VM) 멈춤 1건당 1행. host-monitor가 1초 틱 간격이 임계값 이상일 때 기록한다.
+-- 압박 지표는 깨어난 직후 읽은 /proc/pressure avg10(직전 10초 대기 비율 %)이다. 근거: docs/prd/04-clickhouse-storage.md '호스트 멈춤 기록'
+CREATE TABLE IF NOT EXISTS ops.host_stalls
+(
+    detected_at       DateTime64(3, 'UTC'),
+    gap_ms            UInt32,
+    cpu_some_avg10    Float64,
+    memory_some_avg10 Float64,
+    memory_full_avg10 Float64,
+    io_some_avg10     Float64,
+    io_full_avg10     Float64,
+    mem_available_mb  UInt32,
+    load1             Float64
+)
+ENGINE = MergeTree
+ORDER BY detected_at
+TTL toDateTime(detected_at) + INTERVAL 3 DAY;

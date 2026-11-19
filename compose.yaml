@@ -104,6 +104,7 @@ services:
       CLICKHOUSE_SPARK_PASSWORD: ${CLICKHOUSE_SPARK_PASSWORD:?CLICKHOUSE_SPARK_PASSWORD is required}
       CLICKHOUSE_GENERATOR_PASSWORD: ${CLICKHOUSE_GENERATOR_PASSWORD:?CLICKHOUSE_GENERATOR_PASSWORD is required}
       CLICKHOUSE_GRAFANA_PASSWORD: ${CLICKHOUSE_GRAFANA_PASSWORD:?CLICKHOUSE_GRAFANA_PASSWORD is required}
+      CLICKHOUSE_MONITOR_PASSWORD: ${CLICKHOUSE_MONITOR_PASSWORD:?CLICKHOUSE_MONITOR_PASSWORD is required}
     # 계정·스키마·권한 적용은 스크립트 한 곳에서 관리한다. 모든 문이 반복 실행에 안전하다.
     entrypoint: [/bin/bash, /scripts/init.sh]
     volumes:
@@ -111,6 +112,23 @@ services:
       - ./infra/clickhouse/schema.sql:/scripts/schema.sql:ro
     mem_limit: 512m
     restart: 'no'
+
+  host-monitor:
+    # WSL VM 멈춤을 감지해 ops.host_stalls에 기록한다. bash·GNU date·clickhouse-client가 있는 기존 이미지를 재사용한다.
+    # 근거: docs/prd/04-clickhouse-storage.md '호스트 멈춤 기록'
+    image: clickhouse/clickhouse-server:26.8.38.9
+    depends_on:
+      clickhouse-init:
+        condition: service_completed_successfully
+    environment:
+      CLICKHOUSE_MONITOR_PASSWORD: ${CLICKHOUSE_MONITOR_PASSWORD:?CLICKHOUSE_MONITOR_PASSWORD is required}
+      HOST_STALL_THRESHOLD_MS: ${HOST_STALL_THRESHOLD_MS:-2000}
+    entrypoint: [/bin/bash, /scripts/host-monitor.sh]
+    volumes:
+      - ./infra/clickhouse/host-monitor.sh:/scripts/host-monitor.sh:ro
+    cpus: 0.25
+    mem_limit: 256m
+    restart: unless-stopped
 
   spark:
     build: ./apps/streaming

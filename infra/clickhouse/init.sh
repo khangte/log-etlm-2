@@ -2,7 +2,8 @@
 # ClickHouse 계정 → 스키마 → 권한 순서로 적용한다. `up`마다 다시 실행해도 결과가 같다.
 # 계정은 CREATE USER OR REPLACE로 만들어 .env의 비밀번호 변경을 반영하고, 권한은 매번 다시 부여한다.
 # 필요 환경변수: CLICKHOUSE_USER, CLICKHOUSE_PASSWORD(관리자),
-#   CLICKHOUSE_SPARK_PASSWORD, CLICKHOUSE_GENERATOR_PASSWORD, CLICKHOUSE_GRAFANA_PASSWORD (compose.yaml이 주입한다.)
+#   CLICKHOUSE_SPARK_PASSWORD, CLICKHOUSE_GENERATOR_PASSWORD, CLICKHOUSE_GRAFANA_PASSWORD,
+#   CLICKHOUSE_MONITOR_PASSWORD (compose.yaml이 주입한다.)
 # 근거: docs/prd/04-clickhouse-storage.md '계정과 권한', 'DDL 관리'
 set -euo pipefail
 
@@ -21,6 +22,7 @@ quote() {
 run --query "
 CREATE USER OR REPLACE spark_writer IDENTIFIED WITH sha256_password BY $(quote "$CLICKHOUSE_SPARK_PASSWORD");
 CREATE USER OR REPLACE generator_writer IDENTIFIED WITH sha256_password BY $(quote "$CLICKHOUSE_GENERATOR_PASSWORD");
+CREATE USER OR REPLACE monitor_writer IDENTIFIED WITH sha256_password BY $(quote "$CLICKHOUSE_MONITOR_PASSWORD");
 CREATE USER OR REPLACE grafana_reader IDENTIFIED WITH sha256_password BY $(quote "$CLICKHOUSE_GRAFANA_PASSWORD")
   SETTINGS readonly = 1, max_execution_time CHANGEABLE_IN_READONLY;
 CREATE USER OR REPLACE gold_definer HOST NONE;
@@ -35,6 +37,7 @@ GRANT INSERT, SELECT ON silver.order_events TO spark_writer;
 GRANT INSERT, SELECT ON ops.spark_batch_attempts TO spark_writer;
 GRANT INSERT, SELECT ON ops.spark_query_progress TO spark_writer;
 GRANT INSERT ON ops.producer_stats TO generator_writer;
+GRANT INSERT ON ops.host_stalls TO monitor_writer;
 GRANT SELECT ON gold.* TO grafana_reader;
 GRANT SELECT ON ops.* TO grafana_reader;
 GRANT SELECT ON system.query_log TO grafana_reader;

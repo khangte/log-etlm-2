@@ -1,10 +1,9 @@
 <!-- 메모리 16GB 미만 환경 설정. 근거: docs/prd/04-clickhouse-storage.md '자원 제한', https://clickhouse.com/docs/operations/tips -->
-<!-- 대시보드가 쓰는 query_log·part_log는 유지하고 나머지 내부 로그 테이블을 끈다. -->
+<!-- 대시보드가 쓰는 query_log·part_log와 호스트 자원 추이용 asynchronous_metric_log는 유지하고 나머지 내부 로그 테이블을 끈다. -->
 <clickhouse>
     <metric_log remove="1"/>
     <trace_log remove="1"/>
     <text_log remove="1"/>
-    <asynchronous_metric_log remove="1"/>
     <!-- 기본값은 TTL이 없어 무기한 쌓인다. 지난 측정을 다음 날 조사할 수 있게 3일 보존한다. -->
     <query_log>
         <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
@@ -12,6 +11,10 @@
     <part_log>
         <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
     </part_log>
+    <!-- VM 멈춤 등 지연 급증 시각의 CPU·메모리·IO를 사후 조사하기 위해 켠다. 근거: PRD '저메모리 설정', '호스트 멈춤 기록' -->
+    <asynchronous_metric_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </asynchronous_metric_log>
     <!-- mark cache 512MiB -->
     <mark_cache_size>536870912</mark_cache_size>
 </clickhouse>
