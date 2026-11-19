@@ -1,0 +1,4 @@
+duration_sec,eps,label
+300,2500,warmup
+150,6000,spike
+450,2500,recovery

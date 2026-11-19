@@ -11,12 +11,13 @@ import tempfile
 import unittest
 from collections import Counter
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import patch
 
 from jsonschema import Draft202012Validator, FormatChecker
 
 from log_generator import pools
-from log_generator.config import ClickHouseConfig, Config, ConfigError, load_config
+from log_generator.config import ClickHouseConfig, Config, ConfigError, LoadProfile, Segment, load_config, load_profile
 from log_generator.generator import EventGenerator, serialize
 from log_generator.main import run
 
@@ -173,13 +174,15 @@ ENV_VALUES = {
     "PRODUCER_KAFKA_FLUSH_TIMEOUT_SEC": "30",
     "PRODUCER_CLICKHOUSE_HTTP_URL": "",
     "CLICKHOUSE_GENERATOR_PASSWORD": "",
+    "PRODUCER_LOAD_PROFILE": "",
 }
+PROFILES = Path(__file__).resolve().parents[1] / "profiles"
 
 
 class ConfigTests(unittest.TestCase):
     def test_explicit_env_values(self):
         config = load_config(ENV_VALUES)
-        self.assertEqual(config, Config(5000, "stdout", None, 300000, 500, None, 1, None, None))
+        self.assertEqual(config, Config(5000, "stdout", None, 300000, 500, None, 1, None, None, None))
         config = load_config(ENV_VALUES | {"PRODUCER_EPS": "100", "PRODUCER_SEED": "-3",
                                           "PRODUCER_MAX_EVENTS": "0"})
         self.assertEqual((config.eps, config.seed, config.max_events), (100, -3, None))
@@ -191,7 +194,7 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(missing=key), self.assertRaisesRegex(ConfigError, key):
                 load_config(env)
             if key not in ("PRODUCER_SEED", "PRODUCER_OUTPUT_PATH", "PRODUCER_CLICKHOUSE_HTTP_URL",
-                           "CLICKHOUSE_GENERATOR_PASSWORD"):
+                           "CLICKHOUSE_GENERATOR_PASSWORD", "PRODUCER_LOAD_PROFILE"):
                 with self.subTest(empty=key), self.assertRaisesRegex(ConfigError, key):
                     load_config(ENV_VALUES | {key: " "})
         with self.assertRaises(ConfigError):
@@ -288,6 +291,56 @@ class ConfigTests(unittest.TestCase):
                 load_config(env)
 
 
+class LoadProfileTests(unittest.TestCase):
+    def write(self, text: str) -> str:
+        """임시 프로파일 파일을 만들고 경로를 반환한다."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "profile.csv"
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def test_parses_segments_and_sets_config(self):
+        path = self.write("duration_sec,eps,label\n2,1000,a\n3,2000, b \n")
+        config = load_config(ENV_VALUES | {"PRODUCER_LOAD_PROFILE": path})
+        self.assertEqual(config.profile, LoadProfile(Path(path), (Segment(2, 1000, "a"), Segment(3, 2000, "b"))))
+
+    def test_relative_path_is_from_project_root(self):
+        self.assertEqual(load_profile("apps/log_generator/profiles/spike-12k.csv").path, PROFILES / "spike-12k.csv")
+
+    def test_rejects_invalid_profiles(self):
+        for text in (
+            "",  # 헤더 없음
+            "duration,eps,label\n1,1,a\n",  # 헤더 불일치
+            "duration_sec,eps,label\n",  # 구간 없음
+            "duration_sec,eps,label\n1,1\n",  # 열 개수
+            "duration_sec,eps,label\n1,1,a,x\n",
+            "duration_sec,eps,label\n1.5,1,a\n",  # 정수 아님
+            "duration_sec,eps,label\n0,1,a\n",  # 1 미만
+            "duration_sec,eps,label\n1,0,a\n",
+            "duration_sec,eps,label\n1,1, \n",  # 빈 label
+        ):
+            with self.subTest(text=text), self.assertRaises(ConfigError):
+                load_config(ENV_VALUES | {"PRODUCER_LOAD_PROFILE": self.write(text)})
+        with self.assertRaisesRegex(ConfigError, "PRODUCER_LOAD_PROFILE"):
+            load_config(ENV_VALUES | {"PRODUCER_LOAD_PROFILE": "/nonexistent-dir/x.csv"})
+
+    def test_shipped_profiles_match_prd(self):
+        daily = load_profile(str(PROFILES / "daily.csv")).segments
+        self.assertEqual(sum(s.duration_sec for s in daily), 3600)
+        self.assertEqual(sum(s.duration_sec * s.eps for s in daily), 14_205_000)
+        self.assertEqual(max(s.eps for s in daily), 8000)
+        spike = load_profile(str(PROFILES / "spike-12k.csv")).segments
+        self.assertEqual([(s.duration_sec, s.eps) for s in spike], [(300, 5000), (150, 12000), (450, 5000)])
+        ceiling = load_profile(str(PROFILES / "spike-10k.csv")).segments
+        self.assertEqual([(s.duration_sec, s.eps) for s in ceiling], [(300, 5000), (150, 10000), (450, 5000)])
+        # 2개 프로세스 동시 실행용: 같은 구간 길이에 EPS 절반
+        for name, full in (("spike-10k-half.csv", ceiling), ("spike-12k-half.csv", spike)):
+            half = load_profile(str(PROFILES / name)).segments
+            self.assertEqual([(s.duration_sec, 2 * s.eps, s.label) for s in half],
+                             [(s.duration_sec, s.eps, s.label) for s in full])
+
+
 class RunTests(unittest.TestCase):
     def test_stats_match_output(self):
         out, err = io.BytesIO(), io.StringIO()
@@ -311,6 +364,27 @@ class RunTests(unittest.TestCase):
         self.assertEqual((status, stats.events), ("completed", 500))
         self.assertGreaterEqual(elapsed, 0.45)
         self.assertLess(elapsed, 0.6)
+
+    def test_profile_switches_eps_per_segment_without_catch_up(self):
+        # 1초 1,000 EPS → 1초 2,000 EPS. 경계에서 누적 기준을 다시 잡지 않으면 둘째 구간이 몰아 보내기로 늘어난다.
+        profile = LoadProfile(Path("test.csv"), (Segment(1, 1000, "a"), Segment(1, 2000, "b")))
+        config = replace(load_config(ENV_VALUES | {"PRODUCER_MAX_EVENTS": "0"}), profile=profile)
+        out, err = io.BytesIO(), io.StringIO()
+        stats, status = run(config, out, err)
+        lines = [json.loads(line) for line in err.getvalue().splitlines()]
+        starts = [line for line in lines if line.get("status") == "segment_start"]
+        self.assertEqual(status, "completed")
+        self.assertEqual([(s["label"], s["target_eps"], s["previous"]) for s in starts],
+                         [("a", 1000, None), ("b", 2000, "a")])
+        first = starts[1]["events_written"]
+        self.assertAlmostEqual(first, 1000, delta=100)
+        self.assertAlmostEqual(stats.events - first, 2000, delta=200)
+        self.assertAlmostEqual(lines[-1]["elapsed_sec"], 2.0, delta=0.1)
+        self.assertEqual(lines[-1]["target_eps"]["segments"][1], {"duration_sec": 1, "eps": 2000, "label": "b"})
+        # 상태 주기 1초가 경계와 겹치므로 상태 줄은 현재 구간 값만 확인한다.
+        running = [line for line in lines if line.get("status") == "running"]
+        self.assertTrue(running)
+        self.assertTrue(all((line["label"], line["target_eps"]) in {("a", 1000), ("b", 2000)} for line in running))
 
     def test_output_error_not_counted(self):
         class FailingOut(io.BytesIO):

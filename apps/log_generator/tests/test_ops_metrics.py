@@ -7,10 +7,11 @@ import threading
 import unittest
 import urllib.parse
 from collections import Counter
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from log_generator.config import ClickHouseConfig, load_config
+from log_generator.config import ClickHouseConfig, LoadProfile, Segment, load_config
 from log_generator.main import run
 from log_generator.ops_metrics import ProducerStatsWriter, producer_stats_row
 from test_generator import ENV_VALUES
@@ -83,6 +84,19 @@ class RunWritesProducerStatsTests(unittest.TestCase):
         self.assertEqual(writer.rows[-1]["undelivered"], 0)
         final = json.loads(err.getvalue().splitlines()[-1])
         self.assertEqual(final["producer_stats"]["run_id"], writer.rows[0]["run_id"])
+
+    def test_rows_record_current_segment_target_eps(self):
+        profile = LoadProfile(Path("test.csv"), (Segment(1, 1000, "a"), Segment(1, 2000, "b")))
+        config = replace(load_config(ENV_VALUES | {"PRODUCER_OUTPUT": "kafka", "PRODUCER_MAX_EVENTS": "0",
+                                                   "PRODUCER_SEED": "3"}), profile=profile)
+        out, _, _ = make()
+        writer = FakeWriter()
+        stats, status = run(config, None, io.StringIO(), out, writer=writer)
+        self.assertEqual(status, "completed")
+        self.assertEqual(writer.rows[0]["target_eps"], 1000)
+        self.assertEqual(writer.rows[-1]["target_eps"], 2000)
+        self.assertEqual(sum(r["generated"] for r in writer.rows), stats.events)
+        self.assertEqual(sum(r["acked"] for r in writer.rows), stats.events)
 
 
 class WriterHttpTests(unittest.TestCase):

@@ -18,7 +18,7 @@ from typing import BinaryIO, Callable, TextIO
 from confluent_kafka import KafkaException
 
 from log_generator import pools
-from log_generator.config import Config, ConfigError, load_config
+from log_generator.config import Config, ConfigError, Segment, load_config
 from log_generator.generator import EventGenerator
 from log_generator.ops_metrics import ProducerStatsWriter, producer_stats_row
 from log_generator.outputs.file import open_file
@@ -35,7 +35,7 @@ class Stats:
     정상 완료·Ctrl+C는 flush 성공 후 집계하므로 실제 출력과 일치한다.
     """
 
-    def __init__(self, target_eps: int):
+    def __init__(self, target_eps: int | dict):
         self.target_eps = target_eps
         self.start = time.monotonic()
         self.events = 0
@@ -108,32 +108,52 @@ def _log(err: TextIO, data: dict) -> None:
 def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | None = None,
         stop_requested: Callable[[], bool] = lambda: False,
         writer: ProducerStatsWriter | None = None) -> tuple[Stats, str]:
-    """설정 속도로 이벤트를 out(또는 kafka)에 기록한다. (통계, 종료 상태)를 반환한다.
+    """설정 속도(프로파일이 있으면 구간별 속도)로 이벤트를 out(또는 kafka)에 기록한다. (통계, 종료 상태)를 반환한다.
 
     kafka가 있으면 out은 쓰지 않는다. Stats의 건수는 큐 등록 기준이고 ACK 성공 건수는 kafka 지표에 있다.
     writer가 있으면(kafka 출력 전용) 1초 구간 지표를 넘기고 종료 시 마지막 부분 구간까지 보낸 뒤 닫는다.
     """
     sink = kafka or out  # 둘 다 flush()를 제공하며 kafka의 flush는 실패·미전달 시 OSError를 낸다.
     generator = EventGenerator(random.Random(config.seed), pools.build_user_pool(config.user_pool_size))
-    stats = Stats(config.eps)
-    # 한 틱에 허용하는 최대 출력 수. 이보다 밀리면 기준 시각을 당겨 밀린 분량을 포기한다(몰아서 따라잡지 않음).
-    burst = max(1, math.ceil(config.eps * TICK_SEC)) * 2
+    profile = config.profile
+    stats = Stats({"path": str(profile.path), "segments": [vars(s) for s in profile.segments]} if profile else config.eps)
+    # 고정 속도는 끝이 없는 구간 하나로 다룬다(duration_sec 0 = 무제한).
+    segments = profile.segments if profile else (Segment(0, config.eps, ""),)
+    seg_index = -1
+    seg_end = stats.start  # 현재 구간 종료 monotonic 시각. 무제한이면 None
+    eps = burst = base_events = 0
     schedule_start = stats.start
+
+    def start_segment(now: float) -> None:
+        """다음 구간으로 넘어가 누적 기준을 현재 시각·건수로 다시 잡는다. 이전 구간 부족분은 넘기지 않는다."""
+        nonlocal seg_index, seg_end, eps, burst, base_events, schedule_start
+        previous = segments[seg_index].label if seg_index >= 0 else None
+        seg_index += 1
+        segment = segments[seg_index]
+        eps, base_events, schedule_start = segment.eps, stats.events, now
+        # 한 틱에 허용하는 최대 출력 수. 이보다 밀리면 기준 시각을 당겨 밀린 분량을 포기한다(몰아서 따라잡지 않음).
+        burst = max(1, math.ceil(eps * TICK_SEC)) * 2
+        seg_end = seg_end + segment.duration_sec if segment.duration_sec else None
+        if profile:
+            _log(err, {"status": "segment_start", "elapsed_sec": round(now - stats.start, 3), "label": segment.label,
+                       "target_eps": eps, "previous": previous, "events_written": stats.events})
+
+    start_segment(stats.start)
     next_tick = stats.start
     next_status = stats.start + config.status_interval_sec
     status = "completed"
     run_id = uuid.uuid4().hex
     serialize_us: Counter = Counter()  # 구간별 생성·직렬화 시간(us) 히스토그램
-    interval = {"wall": time.time(), "events": 0}  # 현재 구간 시작 wall 시각과 그때의 생성 건수
+    interval = {"wall": time.time(), "events": 0, "eps": eps}  # 현재 1초 구간 시작 wall 시각·생성 건수·목표 EPS
     next_interval = stats.start + METRICS_INTERVAL_SEC
 
     def emit_interval() -> None:
         """현재 구간을 행으로 넘기고 다음 구간을 시작한다."""
         nonlocal serialize_us
-        writer.submit(producer_stats_row(interval["wall"], run_id, config.eps,
+        writer.submit(producer_stats_row(interval["wall"], run_id, interval["eps"],
                                          stats.events - interval["events"], kafka.interval_metrics(), serialize_us))
         serialize_us = Counter()
-        interval.update(wall=time.time(), events=stats.events)
+        interval.update(wall=time.time(), events=stats.events, eps=eps)
 
     try:
         while config.max_events is None or stats.events < config.max_events:
@@ -150,10 +170,16 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
             next_tick += TICK_SEC
             if next_tick < now:  # 출력 지연으로 틱이 밀리면 다음 틱을 현재 기준으로 맞춘다.
                 next_tick = now + TICK_SEC
+            # 멈춤으로 여러 경계를 지났으면 남은 시간이 있는 구간까지 건너뛴다.
+            while seg_end is not None and now >= seg_end and seg_index + 1 < len(segments):
+                start_segment(now)
+            if seg_end is not None and now >= seg_end:
+                break  # 마지막 구간 종료
 
-            due = int((now - schedule_start) * config.eps) - stats.events
+            written = stats.events - base_events
+            due = int((now - schedule_start) * eps) - written
             if due > burst:
-                schedule_start = now - (stats.events + burst) / config.eps
+                schedule_start = now - (written + burst) / eps
                 due = burst
             if config.max_events is not None:
                 due = min(due, config.max_events - stats.events)
@@ -179,7 +205,8 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
                     next_interval = now + METRICS_INTERVAL_SEC
 
             if now >= next_status:
-                _log(err, stats.progress() | ({"kafka": kafka.metrics()} if kafka else {}))
+                _log(err, stats.progress() | {"target_eps": eps} | ({"label": segments[seg_index].label} if profile else {})
+                     | ({"kafka": kafka.metrics()} if kafka else {}))
                 next_status += config.status_interval_sec
                 if next_status <= now:  # 출력 지연으로 여러 주기가 밀리면 몰아서 출력하지 않고 현재 기준으로 다시 센다.
                     next_status = now + config.status_interval_sec

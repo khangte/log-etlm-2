@@ -5,6 +5,7 @@
 테스트에서 매핑을 전달하면 .env와 프로세스 환경을 읽지 않는다.
 """
 
+import csv
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -18,7 +19,9 @@ COMPRESSIONS = ("none", "gzip", "snappy", "lz4", "zstd")
 # 실행 디렉터리에 따라 다른 .env를 읽지 않도록 프로젝트 루트(src/log_generator의 4단계 위)를 기준으로 한다.
 # 컨테이너 /app/src/log_generator처럼 경로가 얕으면 루트가 없으므로 파일 없이 환경변수만 쓴다.
 _PARENTS = Path(__file__).resolve().parents
-ENV_FILE = _PARENTS[4] / ".env" if len(_PARENTS) > 4 else None
+ROOT = _PARENTS[4] if len(_PARENTS) > 4 else None
+ENV_FILE = ROOT / ".env" if ROOT is not None else None
+PROFILE_HEADER = ["duration_sec", "eps", "label"]
 
 
 class ConfigError(ValueError):
@@ -47,6 +50,23 @@ class ClickHouseConfig:
 
 
 @dataclass(frozen=True)
+class Segment:
+    """부하 프로파일의 한 구간. duration_sec 동안 eps를 고정으로 유지한다."""
+
+    duration_sec: int
+    eps: int
+    label: str
+
+
+@dataclass(frozen=True)
+class LoadProfile:
+    """PRODUCER_LOAD_PROFILE CSV에서 읽은 구간 목록. 마지막 구간이 끝나면 생성을 종료한다."""
+
+    path: Path
+    segments: tuple[Segment, ...]
+
+
+@dataclass(frozen=True)
 class Config:
     eps: int
     output: str
@@ -57,6 +77,7 @@ class Config:
     status_interval_sec: int
     kafka: KafkaConfig | None  # output이 kafka일 때만 값이 있다.
     clickhouse: ClickHouseConfig | None  # kafka 출력이고 URL이 있을 때만 생성기 지표를 기록한다.
+    profile: LoadProfile | None  # 있으면 eps 대신 구간별 eps를 쓴다.
 
 
 def _value(environ: Mapping[str, str | None], key: str, *, allow_empty: bool = False) -> str:
@@ -79,6 +100,35 @@ def _int(environ: Mapping[str, str | None], key: str, minimum: int | None) -> in
     if minimum is not None and value < minimum:
         raise ConfigError(f"{key} must be >= {minimum}: {raw!r}")
     return value
+
+
+def load_profile(raw_path: str) -> LoadProfile:
+    """프로파일 CSV를 읽고 검증한다. 상대 경로는 프로젝트 루트(없으면 실행 디렉터리) 기준이다."""
+    path = Path(raw_path)
+    if not path.is_absolute() and ROOT is not None:
+        path = ROOT / path
+    try:
+        with path.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.reader(f))
+    except (OSError, UnicodeError) as exc:
+        raise ConfigError(f"cannot read PRODUCER_LOAD_PROFILE: {exc}") from exc
+    if not rows or rows[0] != PROFILE_HEADER:
+        raise ConfigError(f"PRODUCER_LOAD_PROFILE header must be {','.join(PROFILE_HEADER)}: {path}")
+    segments = []
+    for line_no, row in enumerate(rows[1:], start=2):
+        if len(row) != len(PROFILE_HEADER):
+            raise ConfigError(f"PRODUCER_LOAD_PROFILE line {line_no}: expected 3 columns: {row!r}")
+        try:
+            duration, eps = int(row[0]), int(row[1])
+        except ValueError:
+            raise ConfigError(f"PRODUCER_LOAD_PROFILE line {line_no}: duration_sec and eps must be integers: {row!r}") from None
+        label = row[2].strip()
+        if duration < 1 or eps < 1 or not label:
+            raise ConfigError(f"PRODUCER_LOAD_PROFILE line {line_no}: duration_sec, eps >= 1 and non-empty label required: {row!r}")
+        segments.append(Segment(duration, eps, label))
+    if not segments:
+        raise ConfigError(f"PRODUCER_LOAD_PROFILE has no segments: {path}")
+    return LoadProfile(path, tuple(segments))
 
 
 def load_config(environ: Mapping[str, str] | None = None) -> Config:
@@ -134,6 +184,8 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
 
     # 빈 seed는 무작위를, 최대 건수 0은 무제한을 명시적으로 뜻한다.
     seed = _value(env, "PRODUCER_SEED", allow_empty=True)
+    # 빈 프로파일 경로는 PRODUCER_EPS 고정 속도를 뜻한다.
+    raw_profile = _value(env, "PRODUCER_LOAD_PROFILE", allow_empty=True)
     return Config(
         eps=_int(env, "PRODUCER_EPS", minimum=1),
         output=output,
@@ -144,4 +196,5 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         status_interval_sec=_int(env, "PRODUCER_STATUS_INTERVAL_SEC", minimum=1),
         kafka=kafka if output == "kafka" else None,
         clickhouse=clickhouse,
+        profile=load_profile(raw_profile) if raw_profile else None,
     )
