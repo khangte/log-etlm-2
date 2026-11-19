@@ -25,6 +25,157 @@
   "graphTooltip": 1,
   "panels": [
     {
+      "id": 26,
+      "type": "row",
+      "title": "통합 지연 현황 · 생성 → Kafka → Spark → ClickHouse",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 24,
+      "type": "table",
+      "title": "전체·단계별 지연 요약 (선택한 시간 범위)",
+      "description": "정상 주문 이벤트 단위(재처리 시도 행 포함, 샘플링 없음). 전체 = ingested_at − event_timestamp. ingested_at은 ClickHouse 서버 INSERT 시각으로 INSERT 완료·조회 가능·Grafana 화면 반영 시각보다 이르다. 각 분위수는 이벤트 시간 차이에서 직접 계산하며 단계별 분위수를 합산하지 않는다. 생성 시각 기준 조회. WSL 시계 보정으로 1초 미만 흔들림은 지연 변화로 해석하지 않는다. 데이터가 없으면 측정 불가.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "rawSql": "SELECT item.1 AS `구간`, item.2 AS `평균`, item.3 AS p50, item.4 AS p95, item.5 AS p99, n AS `측정 건수`\nFROM (SELECT count() AS n, quantilesExact(0.5, 0.95, 0.99)(total) AS total_q, avg(total) AS total_avg,\n  quantilesExact(0.5, 0.95, 0.99)(producer) AS producer_q, avg(producer) AS producer_avg,\n  quantilesExact(0.5, 0.95, 0.99)(queue) AS queue_q, avg(queue) AS queue_avg,\n  quantilesExact(0.5, 0.95, 0.99)(sink) AS sink_q, avg(sink) AS sink_avg\nFROM (SELECT event_timestamp,\n  dateDiff('millisecond', event_timestamp, ingested_at) AS total,\n  dateDiff('millisecond', event_timestamp, kafka_append_timestamp) AS producer,\n  dateDiff('millisecond', kafka_append_timestamp, spark_processed_at) AS queue,\n  dateDiff('millisecond', spark_processed_at, ingested_at) AS sink\nFROM gold.order_event_latency WHERE $__timeFilter(event_timestamp)))\nARRAY JOIN [('전체: 생성→ClickHouse 서버 적재 시각', total_avg, total_q[1], total_q[2], total_q[3]),\n  ('생성→Kafka', producer_avg, producer_q[1], producer_q[2], producer_q[3]),\n  ('Kafka→Spark 콜백 진입', queue_avg, queue_q[1], queue_q[2], queue_q[3]),\n  ('Spark 콜백 진입→ClickHouse 서버 적재 시각', sink_avg, sink_q[1], sink_q[2], sink_q[3])] AS item\nWHERE n > 0"
+        }
+      ],
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 24,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 1,
+          "noValue": "측정 불가",
+          "custom": {
+            "width": 110,
+            "minWidth": 80
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "구간"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "custom.width",
+                "value": 420
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "측정 건수"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "전체·단계별 지연 추이 (p95, 5초 구간)",
+      "description": "정상 주문 이벤트 단위(재처리 시도 행 포함, 샘플링 없음). 전체 = ingested_at − event_timestamp. ingested_at은 ClickHouse 서버 INSERT 시각으로 INSERT 완료·조회 가능·Grafana 화면 반영 시각보다 이르다. 각 분위수는 이벤트 시간 차이에서 직접 계산하며 단계별 분위수를 합산하지 않는다. 생성 시각 기준 조회. WSL 시계 보정으로 1초 미만 흔들림은 지연 변화로 해석하지 않는다. 데이터가 없으면 측정 불가. 전체와 세 구간의 p95를 동일 시간축에서 비교한다. 누적 그래프가 아니다.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "rawSql": "SELECT toStartOfInterval(event_timestamp, INTERVAL 5 SECOND) AS t,\n  quantileExact(0.95)(total) AS `전체: 생성→ClickHouse 서버 적재 시각 p95`,\n  quantileExact(0.95)(producer) AS `생성→Kafka p95`,\n  quantileExact(0.95)(queue) AS `Kafka→Spark 콜백 진입 p95`,\n  quantileExact(0.95)(sink) AS `Spark 콜백 진입→ClickHouse 서버 적재 시각 p95`\nFROM (SELECT event_timestamp,\n  dateDiff('millisecond', event_timestamp, ingested_at) AS total,\n  dateDiff('millisecond', event_timestamp, kafka_append_timestamp) AS producer,\n  dateDiff('millisecond', kafka_append_timestamp, spark_processed_at) AS queue,\n  dateDiff('millisecond', spark_processed_at, ingested_at) AS sink\nFROM gold.order_event_latency WHERE $__timeFilter(event_timestamp))\nGROUP BY t ORDER BY t"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "lineWidth": 1
+          },
+          "noValue": "측정 불가",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "height": 140
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 25,
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 24,
+        "h": 10
+      }
+    },
+    {
       "type": "alertlist",
       "title": "경보 상태",
       "description": "Spark 진행 공백·재시작·배치 실패·INSERT 실패·ID 충돌. 외부 알림은 보내지 않는다.",
@@ -48,7 +199,7 @@
       "id": 1,
       "gridPos": {
         "x": 0,
-        "y": 0,
+        "y": 17,
         "w": 8,
         "h": 7
       }
@@ -116,7 +267,7 @@
       "id": 2,
       "gridPos": {
         "x": 8,
-        "y": 0,
+        "y": 17,
         "w": 8,
         "h": 7
       }
@@ -150,7 +301,7 @@
       "id": 3,
       "gridPos": {
         "x": 16,
-        "y": 0,
+        "y": 17,
         "w": 8,
         "h": 7
       }
@@ -163,7 +314,7 @@
       "id": 4,
       "gridPos": {
         "x": 0,
-        "y": 7,
+        "y": 24,
         "w": 24,
         "h": 1
       }
@@ -218,7 +369,7 @@
       "id": 5,
       "gridPos": {
         "x": 0,
-        "y": 8,
+        "y": 25,
         "w": 8,
         "h": 8
       }
@@ -286,7 +437,7 @@
       "id": 6,
       "gridPos": {
         "x": 8,
-        "y": 8,
+        "y": 25,
         "w": 8,
         "h": 8
       }
@@ -341,7 +492,7 @@
       "id": 7,
       "gridPos": {
         "x": 16,
-        "y": 8,
+        "y": 25,
         "w": 8,
         "h": 8
       }
@@ -413,7 +564,7 @@
       "id": 8,
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 33,
         "w": 12,
         "h": 8
       }
@@ -485,7 +636,7 @@
       "id": 9,
       "gridPos": {
         "x": 12,
-        "y": 16,
+        "y": 33,
         "w": 12,
         "h": 8
       }
@@ -498,7 +649,7 @@
       "id": 10,
       "gridPos": {
         "x": 0,
-        "y": 24,
+        "y": 41,
         "w": 24,
         "h": 1
       }
@@ -570,7 +721,7 @@
       "id": 11,
       "gridPos": {
         "x": 0,
-        "y": 25,
+        "y": 42,
         "w": 12,
         "h": 9
       }
@@ -674,7 +825,7 @@
       "id": 12,
       "gridPos": {
         "x": 12,
-        "y": 25,
+        "y": 42,
         "w": 12,
         "h": 9
       }
@@ -687,7 +838,7 @@
       "id": 13,
       "gridPos": {
         "x": 0,
-        "y": 34,
+        "y": 51,
         "w": 24,
         "h": 1
       }
@@ -758,7 +909,7 @@
       "id": 14,
       "gridPos": {
         "x": 0,
-        "y": 35,
+        "y": 52,
         "w": 8,
         "h": 8
       }
@@ -826,7 +977,7 @@
       "id": 15,
       "gridPos": {
         "x": 8,
-        "y": 35,
+        "y": 52,
         "w": 8,
         "h": 8
       }
@@ -881,7 +1032,7 @@
       "id": 16,
       "gridPos": {
         "x": 16,
-        "y": 35,
+        "y": 52,
         "w": 8,
         "h": 8
       }
@@ -936,7 +1087,7 @@
       "id": 17,
       "gridPos": {
         "x": 0,
-        "y": 43,
+        "y": 60,
         "w": 12,
         "h": 8
       }
@@ -991,7 +1142,7 @@
       "id": 18,
       "gridPos": {
         "x": 12,
-        "y": 43,
+        "y": 60,
         "w": 12,
         "h": 8
       }
@@ -1004,7 +1155,7 @@
       "id": 19,
       "gridPos": {
         "x": 0,
-        "y": 51,
+        "y": 68,
         "w": 24,
         "h": 1
       }
@@ -1092,7 +1243,7 @@
       "id": 20,
       "gridPos": {
         "x": 0,
-        "y": 52,
+        "y": 69,
         "w": 12,
         "h": 8
       }
@@ -1148,7 +1299,7 @@
       "id": 21,
       "gridPos": {
         "x": 12,
-        "y": 52,
+        "y": 69,
         "w": 6,
         "h": 8
       }
@@ -1203,7 +1354,7 @@
       "id": 22,
       "gridPos": {
         "x": 18,
-        "y": 52,
+        "y": 69,
         "w": 6,
         "h": 8
       }
@@ -1275,7 +1426,7 @@
       "id": 23,
       "gridPos": {
         "x": 0,
-        "y": 60,
+        "y": 77,
         "w": 24,
         "h": 8
       }

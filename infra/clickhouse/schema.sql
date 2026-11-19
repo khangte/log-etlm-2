@@ -64,10 +64,11 @@ CREATE VIEW IF NOT EXISTS gold.orders_deduplicated
 DEFINER = gold_definer SQL SECURITY DEFINER AS
 SELECT * FROM silver.order_events FINAL;
 
--- 이벤트 단위 지연(생성 → Kafka, Kafka → Spark) 조회 경로. 재처리 시도 행을 합치지 않으므로 FINAL을 쓰지 않는다.
-CREATE VIEW IF NOT EXISTS gold.order_event_latency
+-- 이벤트 단위 지연(전체·단계별) 조회 경로. 재처리 시도 행을 합치지 않으므로 FINAL을 쓰지 않는다.
+-- 기존 볼륨에도 서버 적재 시각을 노출한다. 원본 테이블의 데이터는 변경하지 않는다.
+CREATE OR REPLACE VIEW gold.order_event_latency
 DEFINER = gold_definer SQL SECURITY DEFINER AS
-SELECT event_id, event_timestamp, kafka_append_timestamp, spark_processed_at, spark_run_id, spark_batch_id
+SELECT event_id, event_timestamp, kafka_append_timestamp, spark_processed_at, spark_run_id, spark_batch_id, ingested_at
 FROM silver.order_events;
 
 -- 운영 지표: 원천별 테이블 4개. 분위수 건수가 0이면 측정 불가이며 분위수 값은 0으로 둔다.
