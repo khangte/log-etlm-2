@@ -1,0 +1,70 @@
+{
+ "note": "bench_spark_stages.py jobs 모드. 파티션당 12,400건(37,200건, 정상 31,541건), 워밍업 3회 후 5회 중앙값, 회차마다 변형 순서를 뒤집음. local[3], --driver-memory 1536m, spark.python.sql.dataFrameDebugging.enabled=false(S5a와 같음). 스트리밍 컨테이너 정지 상태 1회성 컨테이너.",
+ "ends": {
+  "0": 56956722,
+  "1": 56954702,
+  "2": 56972826
+ },
+ "jdbc_target": "silver.order_events_bench (CREATE TABLE AS silver.order_events, 같은 ReplacingMergeTree·MV 없음). 측정 후 DROP, spark_writer 권한 REVOKE",
+ "variants": {
+  "agg_latency_on|off": "캐시를 채우는 첫 action(summarize_batch) 지연 분위수 켬/끔",
+  "orders_<jdbc|noop>_<dedup|nodedup>": "캐시된 분류 결과에서 정상 출력 action. JDBC는 운영 write_orders, noop은 계산만"
+ },
+ "derived_ms": {
+  "latency_quantiles": 75.1,
+  "dedup_with_jdbc": 335.6,
+  "dedup_with_noop": 374.9,
+  "jdbc_with_dedup": 391.3,
+  "jdbc_without_dedup": 430.6
+ },
+ "median_ms": {
+  "agg_latency_on": 1102.5,
+  "agg_latency_off": 1027.4,
+  "orders_jdbc_dedup": 983.5,
+  "orders_jdbc_nodedup": 647.9,
+  "orders_noop_dedup": 592.2,
+  "orders_noop_nodedup": 217.3
+ },
+ "rounds": [
+  {
+   "agg_latency_on": 1220.2395030180924,
+   "agg_latency_off": 1044.3363749946002,
+   "orders_jdbc_dedup": 839.2743849835824,
+   "orders_jdbc_nodedup": 605.4940629983321,
+   "orders_noop_dedup": 592.1642189787235,
+   "orders_noop_nodedup": 260.8374539995566
+  },
+  {
+   "agg_latency_off": 1027.3825740150642,
+   "agg_latency_on": 1102.4717199907172,
+   "orders_noop_nodedup": 235.33750700880773,
+   "orders_noop_dedup": 644.8494069918524,
+   "orders_jdbc_nodedup": 594.8248140048236,
+   "orders_jdbc_dedup": 1216.9022840098478
+  },
+  {
+   "agg_latency_on": 1265.7727140176576,
+   "agg_latency_off": 1018.3702869981062,
+   "orders_jdbc_dedup": 983.5371009830851,
+   "orders_jdbc_nodedup": 647.9119749856181,
+   "orders_noop_dedup": 528.3797409792896,
+   "orders_noop_nodedup": 203.5409540112596
+  },
+  {
+   "agg_latency_off": 1019.8751790157985,
+   "agg_latency_on": 1077.689483994618,
+   "orders_noop_nodedup": 217.27751501020975,
+   "orders_noop_dedup": 506.39371399302036,
+   "orders_jdbc_nodedup": 690.5756600026507,
+   "orders_jdbc_dedup": 920.5895359918941
+  },
+  {
+   "agg_latency_on": 1096.3900130009279,
+   "agg_latency_off": 1188.10204800684,
+   "orders_jdbc_dedup": 1051.6012739972211,
+   "orders_jdbc_nodedup": 729.6656999969855,
+   "orders_noop_dedup": 638.0123049893882,
+   "orders_noop_nodedup": 196.53777399798855
+  }
+ ]
+}

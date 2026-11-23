@@ -6,6 +6,8 @@ JDBC·Kafka 쓰기 시간은 포함하지 않는다. 스트리밍 컨테이너�
 사용법: spark-submit --master local[3] --driver-memory 2g bench_spark_stages.py <ends_json> <per_partition> <mode>
   ends_json: {"0": 끝 offset, ...}. 각 파티션의 [끝 - per_partition, 끝) 구간을 읽는다.
   mode: breakdown(단계 분해) | pickle | arrow(운영 경로만 반복). 변형 비교는 셸에서 컨테이너를 번갈아 실행한다.
+  mode jobs <bench_table>: job별 대조(지연 분위수 켬/끔, JDBC/noop, 중복 제거 켬/끔). JDBC는 bench_table에 실제로 쓴다.
+    bench_table은 운영 테이블과 같은 구조로 미리 만들고 spark_writer에 INSERT·SELECT 권한을 준다.
 """
 
 import json
@@ -76,7 +78,45 @@ REF = source().agg(F.max("timestamp")).first()[0].replace(tzinfo=timezone.utc) +
 PICKLE_UDF = F.udf(T.classify, CLASSIFICATION_SCHEMA, useArrow=False)
 print("rows", source().count(), "ref", REF, flush=True)
 
-if MODE == "breakdown":
+def jobs_round(order: int) -> dict:
+    """job별 비용 대조 1회. 지표 집계(지연 분위수 켬/끔)와 정상 출력(JDBC/noop × 중복 제거 켬/끔)을 잰다.
+
+    순서 효과를 줄이려고 order(회차)마다 변형 순서를 뒤집는다. JDBC는 BENCH_TABLE(운영과 같은 구조)에 쓴다.
+    """
+    r = {}
+    aggs = [("agg_latency_on", True), ("agg_latency_off", False)]
+    for name, latency in (aggs if order % 2 == 0 else aggs[::-1]):
+        classified = T.classify_batch(source(), REF).persist()
+        clock = time.perf_counter()
+        summarize_batch(classified, REF, latency)  # 캐시를 채우는 첫 action이라 운영의 지표 집계 job과 같다
+        r[name] = (time.perf_counter() - clock) * 1000
+        classified.unpersist()
+    classified = T.classify_batch(source(), REF).persist()
+    summarize_batch(classified, REF, True)
+    outs = [("orders_jdbc_dedup", True, True), ("orders_jdbc_nodedup", True, False),
+            ("orders_noop_dedup", False, True), ("orders_noop_nodedup", False, False)]
+    for name, jdbc, dedup in (outs if order % 2 == 0 else outs[::-1]):
+        selected = T.select_orders(classified)
+        frame = with_spark_columns(T.deduplicate_events(selected) if dedup else selected, {"batch_id": 0}, REF)
+        clock = time.perf_counter()
+        sinks.write_orders(frame, CONFIG) if jdbc else noop(frame)
+        r[name] = (time.perf_counter() - clock) * 1000
+    classified.unpersist()
+    return r
+
+
+if MODE == "jobs":
+    from streaming import sinks
+    from streaming.config import load_config
+
+    CONFIG = load_config()
+    sinks.ORDERS_TABLE = sys.argv[4]  # 운영 테이블 대신 같은 구조의 벤치 테이블에 쓴다
+    for i in range(WARMUP):
+        jobs_round(i)
+    rounds = [jobs_round(i) for i in range(REPEAT)]
+    print("RESULT " + json.dumps({"median_ms": {k: round(statistics.median(x[k] for x in rounds), 1) for k in rounds[0]},
+                                  "rounds": rounds}, ensure_ascii=False), flush=True)
+elif MODE == "breakdown":
     run("read_only", lambda: noop(source().select("value", "timestamp")))
     run("udf_pickle_only", lambda: noop(source().select(PICKLE_UDF("value"))))
     run("from_json_only", lambda: noop(source().select(
