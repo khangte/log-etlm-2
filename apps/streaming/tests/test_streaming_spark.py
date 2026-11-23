@@ -661,3 +661,39 @@ def test_Spark_변환_날짜_정수_유니코드_경계(spark, timestamp, text, 
     row = orders.select("os", "quantity", "total_amount",
                         F.date_format("event_timestamp", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").alias("time")).first()
     assert (row.os, row.quantity, row.total_amount, row.time) == (text, quantity, 15000 * quantity, timestamp)
+
+
+class TestArrowUdf:
+    """Arrow 분류 UDF와 pickle 분류 UDF·Python classify의 결과 동일성(PRD 03 'Spark 튜닝' S1)."""
+
+    def values(self):
+        """생성기 출력(정상·제외·불량 유형 전부)과 Kafka 경계 입력(null·빈·깨진 UTF-8·서로게이트)을 모은다."""
+        import random
+
+        from log_generator import pools
+        from log_generator.generator import EventGenerator
+
+        gen = EventGenerator(random.Random(11), pools.build_user_pool(500))
+        surrogate = sample_bytes("valid_order_completed.json").replace(b'"os":"iOS"', b'"os":"\\ud800"')
+        return [gen.next_event().payload for _ in range(3000)] + mixed_values() + [surrogate]
+
+    def test_세_경로의_분류_결과가_같다(self, spark):
+        """Arrow UDF 결과 = pickle UDF 결과 = 드라이버의 classify 직접 호출 결과."""
+        values = self.values()
+        df = frame(spark, values)
+        fields = schemas.CLASSIFICATION_SCHEMA.fieldNames()
+
+        def collect(use_arrow):
+            udf = F.udf(transforms.classify, schemas.CLASSIFICATION_SCHEMA, useArrow=use_arrow)
+            rows = df.select("offset", udf("value").alias("r")).orderBy("offset").collect()
+            return [tuple(row["r"][f] for f in fields) for row in rows]
+
+        direct = [tuple(transforms.classify(v)[f] for f in fields) for v in values]
+        assert collect(True) == collect(False) == direct
+        assert {r[0] for r in direct} == {transforms.ORDER, transforms.EXCLUDED, transforms.DLQ}
+
+    def test_운영_UDF는_Arrow다(self):
+        """transforms.classify_udf가 Arrow 최적화 UDF로 등록됐다."""
+        from pyspark.util import PythonEvalType
+
+        assert transforms.classify_udf.evalType == PythonEvalType.SQL_ARROW_BATCHED_UDF

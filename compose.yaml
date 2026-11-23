@@ -162,6 +162,9 @@ services:
       PYTHONPATH: /opt/app/apps/streaming/src:/opt/app/apps/log_generator/src:/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.9-src.zip
       # 코드가 읽기 전용 마운트라 바이트코드 캐시를 쓰지 않는다.
       PYTHONDONTWRITEBYTECODE: '1'
+      # glibc malloc arena 상한. 기본(코어×8=64개)은 해제 메모리를 쥐고 있어 JVM 힙 밖 RSS가 약 0.4GB 늘었다.
+      # 근거: docs/prd/03-stream-processing.md '메모리 분해'.
+      MALLOC_ARENA_MAX: '2'
     # master·driver 메모리는 JVM 기동 전에 정해야 하므로 spark-submit 인자로 넘긴다.
     command:
       - /opt/spark/bin/spark-submit

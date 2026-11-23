@@ -63,12 +63,37 @@ def _load_schema(file_name: str) -> dict:
     return json.loads((CONTRACTS_DIR / "schemas" / file_name).read_text(encoding="utf-8"))
 
 
+def _inline_refs(schema: dict) -> dict:
+    """`{"$ref": "#/$defs/..."}`만 있는 하위 스키마를 대상 정의로 바꾼 사본을 반환한다.
+
+    jsonschema가 검증 중 `$ref`마다 참조 해석(referencing)을 반복하는 비용을 없앤다. 형제 키워드가 없는
+    로컬 `$ref`는 대상 스키마와 같게 평가되므로 판정·오류 경로가 같다(원본 스키마 검증기와 대조 테스트).
+    다른 형태의 `$ref`는 의미가 달라질 수 있어 기동 시 실패시킨다.
+    """
+    defs = schema.get("$defs", {})
+
+    def walk(node):
+        """하위 스키마를 재귀로 복사하며 `$ref`를 펼친다."""
+        if isinstance(node, list):
+            return [walk(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        if "$ref" in node:
+            ref = node["$ref"]
+            if len(node) != 1 or not ref.startswith("#/$defs/") or ref.removeprefix("#/$defs/") not in defs:
+                raise RuntimeError(f"unsupported $ref form for inlining: {node!r}")
+            return walk(defs[ref.removeprefix("#/$defs/")])
+        return {key: walk(value) for key, value in node.items() if key != "$defs"}
+
+    return walk(schema)
+
+
 _CONTRACT_FILES = {
     ("order_completed", "1.0.0"): "order_completed.1.0.0.schema.json",
     ("health_check", "1.0.0"): "health_check.1.0.0.schema.json",
 }
 # 지원 계약: (event_name, schema_version) → 엄격 검증기. 판정과 DLQ 오류 내용의 기준이다.
-VALIDATORS = {key: _StrictValidator(_load_schema(name), format_checker=_FORMAT_CHECKER)
+VALIDATORS = {key: _StrictValidator(_inline_refs(_load_schema(name)), format_checker=_FORMAT_CHECKER)
               for key, name in _CONTRACT_FILES.items()}
 # 1단 빠른 검증기(Rust). "유효" 판정만 신뢰하고 무효면 엄격 검증기로 다시 판정한다.
 # 소수점 표기 정수(15000.0)를 integer로 허용하므로 소수가 있는 문서에는 쓰지 않는다.
@@ -114,12 +139,14 @@ def _reject_constant(name: str):
 
 
 def _reject_duplicates(pairs) -> dict:
-    """마지막 값으로 덮어쓰는 대신 중복 키를 거부한다."""
-    obj = {}
-    for key, value in pairs:
-        if key in obj:
-            raise ValueError(f"duplicate key: {key!r}")
-        obj[key] = value
+    """마지막 값으로 덮어쓰는 대신 중복 키를 거부한다. 오류 메시지는 처음 다시 나온 키를 가리킨다."""
+    obj = dict(pairs)  # C 구현으로 먼저 만들고, 키 수가 줄었을 때만 중복 키를 찾는다.
+    if len(obj) != len(pairs):
+        seen = set()
+        for key, _ in pairs:
+            if key in seen:
+                raise ValueError(f"duplicate key: {key!r}")
+            seen.add(key)
     return obj
 
 
@@ -158,8 +185,10 @@ def _semantic_error(doc: dict) -> tuple[str, str, str] | None:
 
 def _conversion_error(doc: dict) -> tuple[str, str, str] | None:
     """Spark 변환 전에 원본 시각과 정수 표현 범위를 검증한다. 주문 행은 만들지 않는다."""
+    # 계약 pattern이 `YYYY-MM-DDTHH:MM:SS.mmmZ` 형식을 이미 보장하므로 strptime 대신 C 구현 fromisoformat으로
+    # 연도 0000·초 60처럼 Python datetime이 표현할 수 없는 값만 거른다(Python 3.10은 끝 Z를 받지 않아 뗀다).
     try:
-        datetime.strptime(doc["event_timestamp"], "%Y-%m-%dT%H:%M:%S.%fZ")
+        datetime.fromisoformat(doc["event_timestamp"][:-1])
     except ValueError:
         return "CONVERSION_TIMESTAMP", "event_timestamp", "event_timestamp cannot be represented as a Spark timestamp"
     for column, parts in LONG_PATHS.items():
@@ -234,7 +263,8 @@ LOG_APPEND_TIME = 1  # Kafka 소스 timestampType 값
 KAFKA_COLUMNS = ("kafka_topic", "kafka_partition", "kafka_offset", "kafka_append_timestamp")
 
 
-classify_udf = F.udf(classify, CLASSIFICATION_SCHEMA, useArrow=False)
+# Arrow 직렬화로 Python 워커 입출력 비용을 줄인다(PRD 03 'Spark 튜닝' S1). 분류 결과는 pickle UDF와 같다(대조 테스트).
+classify_udf = F.udf(classify, CLASSIFICATION_SCHEMA, useArrow=True)
 
 # 이벤트 시각 허용 범위(PRD 03 '이벤트 시각 범위 규칙'). 하한은 silver.order_events TTL과 같아야 한다.
 EVENT_TIME_MAX_AGE = timedelta(hours=24)

@@ -140,6 +140,11 @@ class TestParseBoundaries:
         raw = sample_bytes("valid_order_completed.json").replace(b'"os":"iOS"', b'"os":"iOS","os":"x"', 1)
         dlq(classify(raw), "parse", "INVALID_JSON")
 
+    def test_중복_키_메시지는_처음_다시_나온_키(self):
+        """키가 여러 번 겹쳐도 메시지는 순서상 처음 다시 나온 키를 가리킨다."""
+        r = classify(b'{"a":1,"b":2,"b":3,"a":4}')
+        assert r["error_code"] == "INVALID_JSON" and "duplicate key: 'b'" in r["error_message"]
+
     def test_깊은_중첩은_예외없이_불량(self):
         """매우 깊은 중첩도 RecursionError 없이 불량 분류."""
         r = classify(b"[" * 100000 + b"]" * 100000)
@@ -583,6 +588,25 @@ class TestConversion:
         r = classify(mutate(f))
         assert r["outcome"] == "order"
 
+    @pytest.mark.parametrize("ts", [
+        "2026-11-16T06:08:00.123Z", "0001-01-01T00:00:00.000Z", "9999-12-31T23:59:59.999Z",
+        "2024-02-29T00:00:00.000Z", "2026-02-29T00:00:00.000Z", "0000-11-16T06:08:00.123Z",
+        "2026-11-16T23:59:60.000Z", "2026-11-16T24:00:00.000Z", "2026-11-16T06:60:00.000Z",
+        "2026-13-01T00:00:00.000Z", "2026-00-10T00:00:00.000Z", "2026-11-00T00:00:00.000Z"])
+    def test_시각_변환_검사는_strptime과_같다(self, ts):
+        """계약 pattern 형식의 시각에서 fromisoformat 검사가 기존 strptime 검사와 같은 판정을 한다."""
+        from datetime import datetime
+
+        try:
+            datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%fZ")
+            expected = None
+        except ValueError:
+            expected = "CONVERSION_TIMESTAMP"
+        doc = json.loads(sample_bytes("valid_order_completed.json"))
+        doc["event_timestamp"] = ts
+        result = transforms._conversion_error(doc)
+        assert (result[0] if result else None) == expected
+
     def test_Long_컬럼_상수(self):
         """Long 범위 검증 경로는 4개."""
         assert set(LONG_PATHS) == {"total_amount", "discount_amount", "price", "quantity"}
@@ -596,3 +620,61 @@ class TestConversion:
         """\\u 이스케이프는 디코딩 후 계약 검증을 통과한다."""
         raw = sample_bytes("valid_order_completed.json").replace(b'"os":"iOS"', b'"os":"\\uc544\\uc774"')
         assert classify(raw)["outcome"] == "order"
+
+
+class TestInlinedRefs:
+    """엄격 검증기의 `$ref` 인라인 사본이 원본 계약 스키마와 같은 오류를 고르는지(PRD 03 'Spark 튜닝' S3)."""
+
+    def variants(self, doc):
+        """정상 주문의 모든 경로에 대해 키 삭제·타입 변경·빈 값·추가 필드 변형 문서를 만든다."""
+        import copy
+
+        replacements = (None, 1, 1.5, "x", "", [], {}, True, -1, "550e8400-e29b-41d4-a716-44665544000")
+
+        def paths(node, prefix=()):
+            """문서의 모든 하위 경로를 순회한다."""
+            items = node.items() if isinstance(node, dict) else enumerate(node) if isinstance(node, list) else ()
+            for key, value in items:
+                yield prefix + (key,)
+                yield from paths(value, prefix + (key,))
+            if isinstance(node, dict):
+                yield prefix + ("__extra__",)
+
+        for path in list(paths(doc)):
+            for action in ("delete",) + replacements:
+                mutated = copy.deepcopy(doc)
+                parent = mutated
+                for key in path[:-1]:
+                    parent = parent[key]
+                last = path[-1]
+                if last == "__extra__":
+                    parent["unexpected"] = 1
+                elif action == "delete":
+                    if isinstance(parent, list):
+                        continue
+                    del parent[last]
+                else:
+                    parent[last] = action
+                yield mutated
+
+    def test_원본_스키마_검증기와_같은_오류(self, order_doc):
+        """모든 변형에서 best_match 오류의 키워드·경로·메시지가 원본($ref 유지) 검증기와 같다."""
+        from jsonschema.exceptions import best_match
+
+        key = ("order_completed", "1.0.0")
+        original = transforms._StrictValidator(transforms._load_schema(transforms._CONTRACT_FILES[key]),
+                                               format_checker=transforms._FORMAT_CHECKER)
+        checked = 0
+        for doc in self.variants(order_doc):
+            expected, actual = best_match(original.iter_errors(doc)), best_match(VALIDATORS[key].iter_errors(doc))
+            summary = lambda e: None if e is None else (e.validator, list(e.absolute_path), e.message)  # noqa: E731
+            assert summary(actual) == summary(expected), doc
+            checked += expected is not None
+        assert checked > 400
+
+    def test_형제_키워드가_있는_ref는_거부(self):
+        """인라인하면 의미가 달라질 수 있는 `$ref` 형태는 기동 시 실패한다."""
+        with pytest.raises(RuntimeError):
+            transforms._inline_refs({"$defs": {"a": {"type": "string"}},
+                                     "properties": {"x": {"$ref": "#/$defs/a", "minLength": 1}}})
+
