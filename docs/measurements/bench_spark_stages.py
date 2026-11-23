@@ -64,7 +64,7 @@ def production(udf):
     t0 = time.perf_counter()
     counts, _ = summarize_batch(classified, REF, True)
     t1 = time.perf_counter()
-    noop(with_spark_columns(T.deduplicate_events(T.select_orders(classified)), {"batch_id": 0}, REF))
+    noop(with_spark_columns(T.select_orders(classified).dropDuplicates(["event_id"]), {"batch_id": 0}, REF))
     t2 = time.perf_counter()
     noop(T.build_dlq_records(classified))
     t3 = time.perf_counter()
@@ -97,7 +97,7 @@ def jobs_round(order: int) -> dict:
             ("orders_noop_dedup", False, True), ("orders_noop_nodedup", False, False)]
     for name, jdbc, dedup in (outs if order % 2 == 0 else outs[::-1]):
         selected = T.select_orders(classified)
-        frame = with_spark_columns(T.deduplicate_events(selected) if dedup else selected, {"batch_id": 0}, REF)
+        frame = with_spark_columns(selected.dropDuplicates(["event_id"]) if dedup else selected, {"batch_id": 0}, REF)
         clock = time.perf_counter()
         sinks.write_orders(frame, CONFIG) if jdbc else noop(frame)
         r[name] = (time.perf_counter() - clock) * 1000

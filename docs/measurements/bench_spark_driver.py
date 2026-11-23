@@ -21,7 +21,7 @@ from streaming.config import load_config
 from streaming.monitoring import summarize_batch
 from streaming.schemas import ORDER_EVENT_SCHEMA
 from streaming.sinks import CLICKHOUSE_USER, ORDERS_TABLE
-from streaming.transforms import ORDER, build_dlq_records, classify_batch, deduplicate_events, select_orders
+from streaming.transforms import ORDER, build_dlq_records, classify_batch, select_orders
 
 TOPIC, WARMUP, REPEAT = "raw.ecommerce.orders.v1", 3, 7
 ENDS, PER_PART = json.loads(sys.argv[1]), int(sys.argv[2])
@@ -31,6 +31,11 @@ spark = (SparkSession.builder.appName("bench-driver").config("spark.sql.session.
          .config("spark.sql.shuffle.partitions", str(config.shuffle_partitions)).getOrCreate())
 spark.sparkContext.setLogLevel("WARN")
 jvm = spark.sparkContext._jvm
+
+
+def dedup(events):
+    """2026-11-23 D1 전 운영의 배치 내 중복 제거(이전 측정 재현용)."""
+    return events.dropDuplicates(["event_id"])
 
 
 def ms(fn) -> float:
@@ -73,13 +78,13 @@ def one_round() -> dict:
     holder["e"].unpersist()
     r["summarize_action"] = ms(lambda: summarize_batch(classified, started, True))
     metrics = {"query_id": "bench", "run_id": "bench", "batch_id": 0}
-    r["orders_build"] = ms(lambda: holder.update(o=with_spark_columns(deduplicate_events(select_orders(classified)),
+    r["orders_build"] = ms(lambda: holder.update(o=with_spark_columns(dedup(select_orders(classified)),
                                                                       metrics, started)))
     # 정상 출력 구성 세부: 필터+from_json, 컬럼 선택, 배치 내 중복 제거, 추적 컬럼
     r["orders_build_filter_json"] = ms(lambda: holder.update(f=classified.filter(F.col("result.outcome") == ORDER).withColumn(
         "event", F.from_json(F.col("raw_value").cast("string"), ORDER_EVENT_SCHEMA, {"mode": "FAILFAST"}))))
     r["orders_build_select_orders"] = ms(lambda: holder.update(s=select_orders(classified)))
-    r["orders_build_dedup"] = ms(lambda: holder.update(dd=deduplicate_events(holder["s"])))
+    r["orders_build_dedup"] = ms(lambda: holder.update(dd=dedup(holder["s"])))
     r["orders_build_spark_columns"] = ms(lambda: with_spark_columns(holder["dd"], metrics, started))
     qe = holder["o"]._jdf.queryExecution()
     r["orders_analyze"] = ms(lambda: qe.analyzed())
