@@ -7,6 +7,7 @@ INSERT는 백그라운드 스레드에서 보내 생성 속도에 영향을 주�
 import json
 import queue
 import threading
+import time
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -20,6 +21,8 @@ TABLE = "ops.producer_stats"
 USER = "generator_writer"
 TIMEOUT_SECONDS = 5
 CLOSE_TIMEOUT_SECONDS = 10  # 종료 시 남은 행 전송을 기다리는 최대 시간
+# 1초 행을 이 시간만큼 모아 보낸다. 매초 1행 INSERT는 매초 part를 만들어 병합 쓰기 증폭이 컸다(ClickHouse PRD '생성기·Producer 지표').
+FLUSH_INTERVAL_SECONDS = 5
 # 작은 INSERT는 서버가 묶도록 async_insert를 쓰고, 오류를 알 수 있게 flush까지 기다린다.
 INSERT_SETTINGS = {"async_insert": 1, "wait_for_async_insert": 1, "date_time_input_format": "best_effort"}
 
@@ -48,10 +51,11 @@ def producer_stats_row(interval_start: float, run_id: str, target_eps: int, gene
 class ProducerStatsWriter:
     """행을 큐에 받아 백그라운드 스레드가 쌓인 만큼 한 번에 INSERT한다."""
 
-    def __init__(self, config: ClickHouseConfig, err: TextIO):
-        """접속 정보와 경고 출력 대상을 받고 전송 스레드를 시작한다."""
+    def __init__(self, config: ClickHouseConfig, err: TextIO, flush_interval: float = FLUSH_INTERVAL_SECONDS):
+        """접속 정보와 경고 출력 대상, 묶음 간격(초)을 받고 전송 스레드를 시작한다."""
         self.config = config
         self.err = err
+        self.flush_interval = flush_interval
         self.failed_rows = 0  # 전송 실패로 잃은 행 수(최종 통계용)
         self._rows: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._loop, name="producer-stats-writer", daemon=True)
@@ -67,16 +71,20 @@ class ProducerStatsWriter:
         self._thread.join(CLOSE_TIMEOUT_SECONDS)
 
     def _loop(self) -> None:
-        """대기열이 빌 때까지 모은 행을 INSERT 1회로 보낸다. None을 받으면 끝낸다."""
+        """첫 행부터 flush_interval 동안 모은 행을 INSERT 1회로 보낸다. None을 받으면 기다리지 않고 보낸 뒤 끝낸다."""
         while True:
-            batch, stop = [self._rows.get()], False
-            while True:
+            batch = [self._rows.get()]
+            deadline = time.monotonic() + self.flush_interval
+            while batch[-1] is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
                 try:
-                    batch.append(self._rows.get_nowait())
+                    batch.append(self._rows.get(timeout=remaining))
                 except queue.Empty:
                     break
-            if None in batch:
-                stop, batch = True, [row for row in batch if row is not None]
+            stop = batch[-1] is None
+            batch = [row for row in batch if row is not None]
             if batch:
                 self._insert(batch)
             if stop:

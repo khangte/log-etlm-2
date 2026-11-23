@@ -4,6 +4,7 @@ import io
 import json
 import re
 import threading
+import time
 import unittest
 import urllib.parse
 from collections import Counter
@@ -134,6 +135,19 @@ class WriterHttpTests(unittest.TestCase):
         self.assertEqual(params["query"], ["INSERT INTO ops.producer_stats FORMAT JSONEachRow"])
         self.assertEqual((params["async_insert"], params["wait_for_async_insert"]), (["1"], ["1"]))
         self.assertEqual((headers["X-ClickHouse-User"], headers["X-ClickHouse-Key"]), ("generator_writer", "pw"))
+
+    def test_batches_rows_within_flush_interval(self):
+        server, requests = self.serve(200)
+        writer = ProducerStatsWriter(ClickHouseConfig(f"http://127.0.0.1:{server.server_port}", "pw"),
+                                     io.StringIO(), flush_interval=0.5)
+        for i in range(3):  # 간격 안의 행은 INSERT 1회로 묶인다
+            writer.submit({"a": i})
+            time.sleep(0.05)
+        time.sleep(0.8)  # 간격이 지나 첫 묶음이 전송된다
+        writer.submit({"a": 3})
+        writer.close()  # 종료 때는 간격을 기다리지 않고 남은 행을 보낸다
+        bodies = [[json.loads(line)["a"] for line in body.splitlines()] for _, _, body in requests]
+        self.assertEqual(bodies, [[0, 1, 2], [3]])
 
     def test_failure_only_warns(self):
         server, _ = self.serve(500)
