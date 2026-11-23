@@ -14,11 +14,13 @@ from streaming.sources import read_kafka
 
 
 def build_spark(config: Config) -> SparkSession:
-    """세션 시간대 UTC·셔플 파티션 수를 고정한 세션을 만든다. master·driver 메모리는 spark-submit 인자로 정한다."""
+    """세션 시간대 UTC·셔플 파티션 수·call-site 수집 끄기를 고정한 세션을 만든다. master·driver 메모리는 spark-submit 인자로 정한다."""
     spark = (
         SparkSession.builder.appName("orders-stream")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.sql.shuffle.partitions", str(config.shuffle_partitions))
+        # Column 연산마다 붙는 Python 호출 위치 수집(py4j 왕복)을 끈다. 배치당 driver 약 0.26초(PRD 03 S5a).
+        .config("spark.python.sql.dataFrameDebugging.enabled", "false")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
