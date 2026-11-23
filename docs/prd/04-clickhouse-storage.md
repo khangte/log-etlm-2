@@ -176,7 +176,7 @@ Spark 변환 구현 전에 조회 요구사항을 바탕으로 한 행의 의미
   - backlog 배치는 최대 50,000행을 VALUES 문자열 하나로 만든다. 문자열 크기는 수십 MB 수준으로 추정하며 Spark 컨테이너 3GiB 안에서 버티는지 실측한다.
   - `batchsize`는 가장 큰 쓰기 파티션 행 수 기준이다. `SPARK_MAX_OFFSETS_PER_TRIGGER`나 shuffle 파티션 수를 바꾸면 조건을 다시 확인하며, 값은 환경변수로 받는다.
   - 위 동작은 [Spark v4.2.1 `JdbcUtils.savePartition`](https://github.com/apache/spark/blob/v4.2.1/sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/jdbc/JdbcUtils.scala#L784)과 [clickhouse-java v0.11.2 `PreparedStatementImpl`](https://github.com/ClickHouse/clickhouse-java/blob/v0.11.2/jdbc-v2/src/main/java/com/clickhouse/jdbc/PreparedStatementImpl.java#L348) 소스로 확인했다. INSERT 1회는 `INSERT ... VALUES (?, ...)` 형태 문에만 해당하며 Spark 일반 append가 이 형태다. 빈 파티션은 INSERT를 보내지 않는다.
-  - `numPartitions`는 파티션 수 상한으로만 `coalesce`하며 행 수를 다시 고르게 나누지 않는다. shuffle 3개와 `dropDuplicates`도 파티션 균등을 보장하지 않는다.
+  - `numPartitions`는 파티션 수 상한으로만 `coalesce`하며 행 수를 다시 고르게 나누지 않는다. 쓰기 파티션은 Kafka 파티션 3개를 그대로 따르며(2026-11-23 D1로 셔플 제거) 파티션 균등은 Kafka 분배에 달려 있다.
   - 태스크·`foreachBatch` 재실행은 INSERT를 추가한다. INSERT 수와 part 수는 다르다. 시간 파티션 경계를 걸친 INSERT는 part를 2개 만들므로 정각 직후 part 수가 잠시 늘어난다.
   - 4단계 실측 항목: 파티션별 행 수, `system.query_log`의 INSERT 수·`written_rows`·시각(`executeBatch` 1회 = INSERT 1회 실측 포함), 생성 part 수, 배치 처리시간·재시도, Spark 메모리.
   - Spark JDBC는 시각을 `setTimestamp`로 보낸다. 이 경로의 시간대 처리는 [JDBC 날짜·시간 가이드](https://clickhouse.com/docs/integrations/language-clients/java/jdbc_date_time_guide)에 명시돼 있지 않다. Spark 세션 시간대는 이미 `UTC`이며, 4단계에서 알려진 UTC 값을 적재·조회해 `DateTime64(3, 'UTC')` 값이 같은지 확인한다.
@@ -277,7 +277,7 @@ Spark 변환 구현 전에 조회 요구사항을 바탕으로 한 행의 의미
 2. 실패·타임아웃은 예외로 전달한다. 응답 유실은 서버에 저장됐을 수도 있는 불확실한 결과로 취급한다. 태스크 재시도를 거쳐 쿼리가 실패하면 복구 후 같은 체크포인트로 재시작해 미완료 배치를 다시 처리한다.
 3. 재처리에서는 원본 이벤트 ID·업무 필드를 유지한다. 이미 저장된 행도 다시 INSERT될 수 있으며, 정상 적재가 끝난 뒤 DLQ 기록만 실패한 경우도 같은 정책을 적용한다.
 4. `batch_id`는 추적용이다. 배치 완료 표식을 별도로 적는 것만으로 다중 JDBC 쓰기와 원자적으로 커밋되지 않으므로, 이를 근거로 미완료 쓰기를 건너뛰지 않는다. INSERT 전 존재 여부를 SELECT하는 방식에도 의존하지 않는다.
-5. Spark `dropDuplicates`는 입력 중복 감소에 사용할 수 있지만 JDBC 재시도 중복의 최종 방어선은 아니다. v1은 배치 내 `dropDuplicates`만 사용하고 워터마크 기반 상태 중복 제거는 도입하지 않는다. 근거는 [중복 제거·조회 조합 비교](#중복-제거조회-조합-비교)를 따른다.
+5. Spark 중복 제거는 JDBC 재시도 중복의 방어선이 아니다. v1은 처음에 배치 내 `dropDuplicates`를 썼으나, 입력 중복이 사실상 없고 평시 피크 배치당 셔플 비용이 336~375ms라 2026-11-23 제거했다([Spark D1](03-stream-processing.md#입력-중복과-jdbc-적재-중복의-구분)). 워터마크 기반 상태 중복 제거도 도입하지 않는다. 근거는 [중복 제거·조회 조합 비교](#중복-제거조회-조합-비교)를 따른다.
 
 ### 조회 시 중복 제거
 
@@ -319,7 +319,7 @@ Spark 중복 제거, ClickHouse 테이블 엔진·정렬 키, 대시보드 조�
 | 조합 | Spark 중복 제거 | ClickHouse 엔진·정렬 키 | 대시보드 조회 | 조회 비용 | 집계 정확성 | 반영 지연(최악) |
 | --- | --- | --- | --- | --- | --- | --- |
 | A | 배치 내 `dropDuplicates` | `ReplacingMergeTree()`, `ORDER BY event_id` | `FINAL` 뷰 | 조회마다 전체 누적 행을 읽음. 1일 뒤 약 3.67억 행 × 패널 수 | 정확 | T + 배치 + 60초 + 조회시간. 조회시간이 누적량에 따라 증가 |
-| **B (채택)** | 배치 내 `dropDuplicates` | `ReplacingMergeTree()`, `ORDER BY (event_timestamp, event_id)` | `FINAL` 뷰 + 시간 범위 | 15분 구간 약 382.5만 행. 누적량과 무관 | 불변 전제에서 정확 | T + 배치 + 60초 + 조회시간 |
+| **B (채택)** | 없음(2026-11-23 D1 전에는 배치 내 `dropDuplicates`) | `ReplacingMergeTree()`, `ORDER BY (event_timestamp, event_id)` | `FINAL` 뷰 + 시간 범위 | 15분 구간 약 382.5만 행. 누적량과 무관 | 불변 전제에서 정확 | T + 배치 + 60초 + 조회시간 |
 | C | 워터마크 기반 상태 중복 제거 | B와 동일 | B와 동일 | B + Spark 상태 저장. 워터마크 10분이면 약 255만 키 | B와 동일. 추가 이득 없음 | B와 동일 |
 | D | 배치 내 `dropDuplicates` | 원본은 B와 동일. 1분 롤업 테이블은 `MergeTree`이며 refreshable materialized view가 `FINAL` 결과로 교체 | 롤업 테이블 | 대시보드 조회는 수십 행. 분당 1회 재계산이 B 조회 1회분 | 재계산 시점 기준 정확 | B + 롤업 주기 최대 60초 |
 | E | 워터마크 기반 상태 중복 제거 | `MergeTree`, 중복 제거 없음 | 원본 테이블 직접 | 가장 낮음 | 부정확. JDBC 재실행 중복이 합산됨 | B와 동일 |
@@ -328,6 +328,7 @@ B를 채택한 이유는 다음과 같다.
 
 - **A:** 정렬 키가 `event_id`뿐이면 시간 범위 조건으로 읽을 구간을 줄일 수 없다. 갱신을 1분으로 늦춰도 조회 1회 비용이 누적 행 수에 비례해 계속 늘어난다.
 - **B:** `ReplacingMergeTree`와 `FINAL`을 유지하므로 A와 같은 정확성을 가지며, 정렬 키 앞의 `event_timestamp`로 조회 구간만 읽는다. v1 이벤트는 불변이므로 같은 `event_id`의 중복 행은 같은 정렬 키로 모인다.
+- **B의 Spark 중복 제거(2026-11-23 갱신):** 배치 내 `dropDuplicates`는 아래 C와 같은 이유로 정확성 이득이 없어 제거했다. 조회 정확성은 `ReplacingMergeTree`·`FINAL`로 같다.
 - **C:** Producer는 `enable.idempotence=true`이고 생성기는 주문마다 새 ID를 발급하므로 Kafka 입력 중복은 사실상 없다. 실제 중복 원인은 마이크로배치 재실행이며, 재실행 시 Spark 상태는 해당 배치 이전으로 복원돼 같은 행을 다시 내보낸다. 상태 저장 비용과 늦은 데이터 정책만 추가된다.
 - **D:** 1분 갱신에서는 B의 직접 조회가 조회 시간 예산에 들어올 것으로 본다. 롤업은 화면 반영 최악 지연을 약 2분으로 늘리고 구성 요소를 추가하므로, B의 실측 조회시간이 예산을 넘을 때 도입한다.
 - **E:** 일반 `MergeTree`는 같은 이벤트의 재적재를 합치지 않는다. Spark 상태 중복 제거는 JDBC 재실행 중복을 막지 못하므로 주문 수·매출이 부풀 수 있다.

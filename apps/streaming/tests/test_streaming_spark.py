@@ -67,7 +67,7 @@ def mixed_values():
 
 
 class TestClassifyAndSelect:
-    """classify_batch·select_orders·deduplicate_events."""
+    """classify_batch·select_orders."""
 
     def test_classify_batch_컬럼(self, spark):
         """원문·추적 컬럼과 result 구조체."""
@@ -114,17 +114,6 @@ class TestClassifyAndSelect:
         df = transforms.select_orders(classify_batch(frame(spark, [sample_bytes("valid_order_completed.json")])))
         s = df.select(F.date_format("event_timestamp", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").alias("t")).first()["t"]
         assert s == "2026-11-16T06:08:00.123Z"
-
-    def test_배치_내_event_id_중복_제거(self, spark):
-        """같은 event_id 3건 → 1행. 다른 id 는 유지."""
-        v = sample_bytes("valid_order_completed.json")
-        o2 = json.loads(v)
-        o2["event_id"] = "660e8400-e29b-41d4-a716-446655440000"
-        selected = transforms.select_orders(classify_batch(frame(spark, [v, v, dump(o2), v])))
-        assert selected.count() == 4  # 중복 제거는 select_orders 가 아니라 deduplicate_events 책임
-        orders = transforms.deduplicate_events(selected)
-        assert orders.count() == 2
-        assert orders.select("event_id").distinct().count() == 2
 
     def test_정상_없는_배치(self, spark):
         """불량·제외만 있어도 select_orders 는 0행."""
@@ -307,7 +296,7 @@ class TestProcessBatch:
             "SPARK_JDBC_BATCH_SIZE": "50000", "SPARK_JDBC_NUM_PARTITIONS": "3"})
 
     def test_건수_로그와_출력(self, spark, config, monkeypatch, caplog, orders_out, ops_rows):
-        """배치 로그 JSON 의 input = order + excluded + dlq, 출력 행수·DLQ 건수 일치, 중복 제거, 추적 컬럼."""
+        """배치 로그 JSON 의 input = order + excluded + dlq, 출력 행수·DLQ 건수 일치, 배치 내 중복 유지(D1), 추적 컬럼."""
         captured = {}
         monkeypatch.setattr(batch, "write_dlq", lambda records, cfg: captured.setdefault("dlq", records.collect()))
         vals = mixed_values() + [sample_bytes("valid_order_completed.json")]  # 중복 event_id 1건 추가
@@ -318,7 +307,8 @@ class TestProcessBatch:
         log = json.loads(msg[len("batch "):])
         assert log == {"batch_id": 7, "input": 9, "order": 3, "excluded": 1, "dlq": 5}
         assert log["input"] == log["order"] + log["excluded"] + log["dlq"] == len(vals)
-        assert len(orders_out["rows"]) == 2  # 배치 내 event_id 중복 제거: 3 → 2
+        assert len(orders_out["rows"]) == 3  # 배치 내 event_id 중복도 그대로 쓴다(D1). ClickHouse FINAL이 합친다
+        assert len({r["event_id"] for r in orders_out["rows"]}) == 2
         assert len(orders_out["columns"]) == 39  # 이벤트 31 + Kafka 4 + Spark 추적 4
         assert orders_out["columns"][-4:] == ["spark_query_id", "spark_run_id", "spark_batch_id", "spark_processed_at"]
         metrics = json.loads(next(r.getMessage()[8:] for r in caplog.records if r.getMessage().startswith("latency ")))

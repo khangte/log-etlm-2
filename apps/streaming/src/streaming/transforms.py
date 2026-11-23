@@ -326,11 +326,6 @@ def select_orders(classified: DataFrame) -> DataFrame:
     return orders.select(*columns, *KAFKA_COLUMNS)
 
 
-def deduplicate_events(events: DataFrame) -> DataFrame:
-    """배치 안의 같은 event_id 행을 하나만 남긴다. 배치 간 중복은 PRD에 따라 처리하지 않는다."""
-    return events.dropDuplicates(["event_id"])
-
-
 def build_dlq_records(classified: DataFrame) -> DataFrame:
     """불량 레코드를 Kafka writer용 key·value로 만든다. 스키마는 PRD 'DLQ 메시지 스키마'를 따른다."""
     position = F.concat_ws(":", "kafka_topic", "kafka_partition", "kafka_offset")

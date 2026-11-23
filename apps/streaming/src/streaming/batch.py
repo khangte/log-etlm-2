@@ -12,8 +12,7 @@ from streaming.config import Config
 from streaming.monitoring import summarize_batch
 from streaming.ops_metrics import BATCH_ATTEMPTS_TABLE, batch_attempt_row, insert_rows
 from streaming.sinks import write_dlq, write_orders
-from streaming.transforms import (DLQ, EXCLUDED, ORDER, build_dlq_records, classify_batch, deduplicate_events,
-                                  select_orders)
+from streaming.transforms import DLQ, EXCLUDED, ORDER, build_dlq_records, classify_batch, select_orders
 
 log = logging.getLogger("streaming")
 
@@ -29,7 +28,7 @@ def with_spark_columns(orders: DataFrame, metrics: dict, callback_started_at: da
 
 
 def process_batch(batch: DataFrame, batch_id: int, config: Config, query_context: dict | None = None) -> None:
-    """변환 → 중복 제거 → 저장 순서를 제어하고 분류·출력 action을 계측한다. 실패한 시도도 로그에 남기고 예외는 쿼리에 전달한다."""
+    """변환 → 저장 순서를 제어하고 분류·출력 action을 계측한다. 실패한 시도도 로그에 남기고 예외는 쿼리에 전달한다."""
     callback_started_at = datetime.now(timezone.utc)
     callback_clock = time.perf_counter()
     metrics = {**(query_context or {}), "batch_id": batch_id,
@@ -52,7 +51,8 @@ def process_batch(batch: DataFrame, batch_id: int, config: Config, query_context
             metrics["classification_and_metrics_action_ms"] = (time.perf_counter() - action_clock) * 1000
         for outcome, writer, frame_builder, stage in (
             (ORDER, write_orders,
-             lambda frame: with_spark_columns(deduplicate_events(select_orders(frame)), metrics, callback_started_at),
+             # 배치 내 event_id 중복 제거는 하지 않는다. 중복은 ClickHouse ReplacingMergeTree·FINAL이 처리한다(PRD 03 D1).
+             lambda frame: with_spark_columns(select_orders(frame), metrics, callback_started_at),
              "orders_write_action"),
             (DLQ, write_dlq, build_dlq_records, "dlq_write_action"),
         ):
