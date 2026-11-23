@@ -1,6 +1,6 @@
 # Spark 스트림 처리
 
-- 상태: 완료 (5,000 EPS 지속 부하 충족(로컬 Parquet 1차, ClickHouse 경로는 4단계에서 재측정·통과), 출력 장애·재시작·offset 소실·DLQ 조회 검증 완료, 지연 주입 부분 통과 후 판정 정리, 계측 오버헤드 1회 측정. [3단계 마무리 검증 계획](#3단계-마무리-검증-계획-2026-11-17) 종료)
+- 상태: 완료 (5,000 EPS 지속 부하 충족(로컬 Parquet 1차, ClickHouse 경로는 4단계에서 재측정·통과), 출력 장애·재시작·offset 소실·DLQ 조회 검증 완료, 지연 주입 부분 통과 후 판정 정리, 계측 오버헤드 1회 측정. [3단계 마무리 검증 계획](#3단계-마무리-검증-계획-2026-11-17) 종료). 6단계 [Spark 튜닝](#spark-튜닝-6단계-2026-11-20) 진행 중
 - 적용 범위: 제품 v1
 
 ## 목표
@@ -242,8 +242,9 @@ Spark는 단일 컨테이너의 local 모드로 실행한다. 아래 값은 PRD 
 | 환경변수 | 초기값 | 근거 |
 | --- | --- | --- |
 | `SPARK_MASTER` | `local[3]` | 원본 파티션 3개와 태스크를 1:1로 맞춘다. 늘려도 Kafka 읽기 병렬도는 파티션 수 3에서 막힌다. |
-| `SPARK_DRIVER_MEMORY` | `2g` | local 모드에서는 driver heap이 실행 메모리 전체다. 배치 최대 원문 39.7MB(50,000 × 793B)를 파싱·컬럼 전개로 10배 잡아도 약 400MB다. |
+| `SPARK_DRIVER_MEMORY` | `2g` → `1536m` (6단계) | local 모드에서는 driver heap이 실행 메모리 전체다. 배치 최대 원문 39.7MB(50,000 × 793B)를 파싱·컬럼 전개로 10배 잡아도 약 400MB다. 6단계 측정에서 살아 있는 데이터는 250~560MB였고, 2g에서는 힙 commit이 1.7GB까지 늘어 컨테이너가 3g에 닿았다. 1536m으로 줄여 부하 중 메모리 최대가 약 420MB 줄었다([JVM 튜닝 결과](#jvm-튜닝-결과-2026-11-20)). |
 | 컨테이너 `mem_limit` / `cpus` | `3g` / `3` (6단계에서 `cpus` 4) | heap 2g에 JVM 비heap·네이티브 약 1g를 더한다. Kafka 2 + UI 1 + Spark 3 = 6GiB이며 ClickHouse·Grafana·개발 도구에 약 6GB가 남는다. `cpus`는 스파이크 측정에서 상한에 걸린 주기가 16.8%라서 6단계에서 4로 올렸다([자원 조정](06-load-profile.md#자원-조정)). |
+| 컨테이너 `MALLOC_ARENA_MAX` (6단계 추가) | `2` (Compose 고정) | glibc malloc arena 상한. 기본값(코어 8 × 8 = 64개)에서는 arena가 해제 메모리를 쥐어 JVM 힙 밖 RSS가 약 0.4GB 늘었다. Python 워커에도 적용된다. 근거는 [메모리 분해](#메모리-분해-2026-11-20)다. |
 | `SPARK_TRIGGER_INTERVAL` | `5 seconds` | 배치당 약 25,000건(19.8MB). 반영 지연에 최대 5초를 더하며 60초 갱신 대기보다 작다. |
 | `SPARK_MAX_OFFSETS_PER_TRIGGER` | `55000` | 2026-11-19 50,000에서 올렸다. 근거는 [부하 프로파일 자원 조정](06-load-profile.md#자원-조정)이다. 처음 값 50,000은 평상시 예상 25,000건의 2배였다. 5초 내 처리 시에만 최대 10,000 EPS에 해당하며 처리속도를 보장하지 않는다. 첫 지속 부하 실측에서는 약 50,000건 처리에 평균 16.05초가 걸렸고, 2단 검증 적용 후 재측정에서는 배치당 약 25,000건을 평균 2.04초에 처리했다. |
 | `SPARK_SHUFFLE_PARTITIONS` | `3` | `local[3]` 태스크 슬롯 수와 같게 두어 셔플 후 태스크가 한 번에 모두 실행된다. 슬롯보다 많으면 태스크가 여러 차례로 나뉘어 실행될 뿐 병렬도는 늘지 않고, 배치당 Parquet 파일 수만 늘어난다. 4단계 `SPARK_JDBC_NUM_PARTITIONS`와 같은 값이다. 체크포인트에 기록되므로 변경하려면 체크포인트를 새로 만든다. |
@@ -769,6 +770,371 @@ docker compose stop spark                                      # 정지. 체크�
 - `docs/runbooks/local-development.md`에 Spark 절을 보완한다: 기동·중지·같은 체크포인트 재시작, 측정용 별도 체크포인트 실행, 테스트 명령, 정상 출력·DLQ 쓰기 실패와 offset 소실 시 조치, DLQ 조회·원문 복원 절차 참조, 체크포인트 초기화 시 주의.
 - 위 1~3과 기존 검증 결과에서 실제로 실행한 명령만 적는다.
 - 결과 (2026-11-17): [로컬 개발 runbook](../runbooks/local-development.md) 7절에 기동·로그·중지, 같은 체크포인트 재시작, 테스트, 측정용 별도 경로 실행, 장애 증상별 조치(정상 출력·DLQ·커밋 실패, offset 소실), 체크포인트 초기화 주의, DLQ 조회·원문 복원 참조를 추가했다. offset 소실 후 새 체크포인트로 시작하는 조치는 실행·검증하지 않았다고 명시했다.
+
+## Spark 튜닝 (6단계, 2026-11-20)
+
+[부하 프로파일 PRD](06-load-profile.md)의 단일 생성기 튜닝 세 번째 단계다. Producer 단계에서는 `linger.ms=5`를 유지했다([Producer 튜닝 결정](02-kafka-ingestion.md#결정-2026-11-19)). 기준값 측정에서 Spark가 못 맞춘 목표는 다음과 같다([기준값 측정](06-load-profile.md#기준값-측정-완료-기준-4-2026-11-19)).
+
+- 평시 피크(7,500 EPS) 배치 트리거 시간 p99: 4,976ms. 목표는 3,500ms 이하다.
+- 지속 용량: 판정값 11,000 EPS는 배치 상한(`SPARK_MAX_OFFSETS_PER_TRIGGER=55000`, 11,000 EPS)과 같다. 실처리량은 약 10,200~10,900 EPS라 10,000 EPS 단계의 여유가 작다.
+- 9,000 EPS 이상에서 Spark는 시간의 약 97% 동안 배치를 실행 중이다. Producer ACK 지연의 추정 원인(호스트 CPU 경합)과도 겹친다.
+
+### 비용 분해 (2026-11-20)
+
+운영 배치의 action별 시간(`ops.spark_batch_attempts`, 기준값 `step.csv` 실행, 입력 50,000건 이상 배치 51개 평균, 평균 54,118건):
+
+| action | 평균 |
+| --- | ---: |
+| 분류·계측 (`classification_ms`: Kafka 읽기, 분류 UDF, persist, 건수·지연 집계) | 2,816ms |
+| 정상 출력 (`orders_write_ms`: 구조화·평탄화, 배치 내 중복 제거, JDBC 쓰기) | 1,970ms |
+| DLQ 출력 (`dlq_write_ms`) | 214ms |
+| 콜백 전체 | 5,003ms |
+
+같은 크기(파티션당 18,000건, 54,000건)의 고정 offset 구간을 batch 모드로 읽어 단계별로 나눠 측정했다. 스트리밍 컨테이너는 멈추고, 같은 이미지·`local[3]`·`--driver-memory 2g`·CPU 4로 1회성 컨테이너를 띄웠다. 출력은 `noop` 형식이라 JDBC·Kafka 쓰기 시간은 빠진다. 각 항목은 워밍업 1회 후 3회 중앙값이다. 측정 스크립트는 [bench_spark_stages.py](../measurements/bench_spark_stages.py)다.
+
+| 측정 | 중앙값 | 해석 |
+| --- | ---: | --- |
+| Kafka 읽기만 | 729ms | 배치마다 드는 고정 비용에 가깝다 |
+| 읽기 + pickle 분류 UDF | 2,066ms | UDF 약 1,340ms. `classify` 순수 CPU(행당 53.7µs × 54,000건 ÷ 3코어 ≈ 970ms)와 Python 워커 직렬화(약 370ms)다 |
+| 읽기 + Arrow 분류 UDF | 1,632ms | pickle보다 약 430ms 짧다 |
+| 읽기 + `from_json` 평탄화 | 992ms | JVM 파싱 약 260ms |
+| 운영 경로(쓰기 제외), pickle | 3,940ms | 분류·계측 약 2,100~2,300ms, 정상 변환 약 1,000~1,300ms, DLQ 변환 약 140ms |
+| 운영 경로(쓰기 제외), Arrow | 3,267ms | pickle보다 약 17% 짧다. 순서 효과가 섞였을 수 있어 교차 반복으로 다시 확인한다 |
+
+- 운영 정상 출력 1,970ms와 벤치 정상 변환 약 1,000~1,300ms의 차이(약 0.7~1.0초)가 JDBC 쓰기 시간으로 추정된다.
+- `classify` 비용 중 약 28%는 행의 3.3%인 불량 문서의 엄격 검증 경로(건당 약 450µs)다. 정상 문서는 건당 33.5µs이고, `json.loads`(중복 키·비표준 상수 hook 포함) 11.6µs, `strptime` 8.0µs, 1단 빠른 검증 1.4µs, date-time 형식 검사 2.1µs, 의미 검증 1.2µs다.
+
+### 가설
+
+- 분류 UDF(약 1.3초)가 54,000건 배치의 가장 큰 단일 비용이다. Python 워커 직렬화를 Arrow로 바꾸고 `classify` CPU를 줄이면 배치 시간이 줄어든다.
+- 배치 시간이 줄면 평시 피크 p99가 3,500ms 아래로 내려가고, 10,000 EPS 단계의 실처리량 여유가 늘어난다.
+
+### 실험
+
+한 번에 하나씩 적용하고 측정한다. 앞 실험에서 채택한 변경은 다음 실험의 기준이 된다.
+
+| 실험 | 변경 | 분류 결과 영향 |
+| --- | --- | --- |
+| S1 | Arrow 최적화 Python UDF(`useArrow=True`). Spark 이미지에 `pyarrow`·`pandas`를 고정 버전으로 설치한다 | 같은 `classify` 함수라 바뀌지 않아야 한다. pickle·Arrow 결과 대조 테스트로 확인한다 |
+| S2 | `classify` 정상 경로 CPU 축소. `strptime` 검사와 중복 키 hook을 같은 판정의 더 싼 구현으로 바꾼다 | 기존 단위 테스트·대조 테스트로 결과 동일을 확인한다 |
+| S3 | 불량 문서 엄격 검증 경로 비용 축소 | `error_code`·`error_path`가 바뀌지 않아야 한다. 프로파일로 원인을 확인한 뒤 방법을 정한다 |
+| S4 | 이벤트 시각 범위 검사의 `get_json_object` 재파싱 제거. 분류 결과에 원본 `event_timestamp`를 담는다 | DLQ 메시지 스키마는 바뀌지 않는다 |
+
+- 정상 변환·JDBC 쓰기(합계 약 2초)는 S1~S4 뒤 비용 분해를 다시 해서 후보를 정한다.
+- 후보에서 뺀 것:
+  - Spark SQL 내장 함수로만 검증: 중복 키·`15000.0` 같은 엄격 규칙을 SQL 표현식으로 같게 판정할 수 없다. 규칙을 바꾸려면 이 PRD의 검증 규칙부터 다시 정해야 한다.
+  - Scala UDF: 검증기를 JVM 언어로 다시 구현해야 하고, 계약 검증 기준(`jsonschema`)이 둘로 나뉜다.
+  - CPU·코어 증설: 호스트 8 논리 코어를 생성기·Kafka·ClickHouse와 나눠 쓰는 자원 예산은 유지한다.
+  - 배치 상한(`SPARK_MAX_OFFSETS_PER_TRIGGER`) 변경: 지속 용량 판정 범위(11,000 EPS)를 유지한다. 실처리량이 상한을 넘으면 다시 정한다.
+
+### 선택 기준
+
+1. 분류 결과가 같다. `outcome`과 `error_*` 필드가 기존 구현과 같아야 한다(단위 테스트, pickle·Arrow 대조 테스트).
+2. 벤치 운영 경로(쓰기 제외) 중앙값이 기준보다 5% 이상 짧다. 기준과 후보는 같은 컨테이너에서 번갈아 실행한다.
+3. 채택한 변경을 모두 적용한 뒤 `steady.csv`·`step.csv`를 실행해 [튜닝 목표](06-load-profile.md#튜닝-목표)로 판정한다: 평시 피크 트리거 p99 ≤ 3,500ms, 10,000 EPS 단계 통과, 종단 간 지연 p99 ≤ 10초, 공통 기준 충족.
+4. Spark 메모리 최대치가 `mem_limit: 3g` 안이다.
+
+### 실험 결과 (2026-11-20)
+
+벤치는 [비용 분해](#비용-분해-2026-11-20)와 같은 구간·조건에서 JIT 워밍업 3회 후 5회 중앙값이다. 기준과 후보는 1회성 컨테이너를 번갈아 3쌍(S1은 2쌍) 실행했다. 기준 코드는 직전 커밋의 `apps/streaming/src`를 마운트해 실행했다.
+
+| 실험 | 측정 | 기준 | 후보 | 차이 | 판정 |
+| --- | --- | ---: | ---: | ---: | --- |
+| S1 Arrow UDF | 운영 경로(쓰기 제외) 중앙값 평균 | 3,822ms | 3,569ms | −6.6% | 채택 |
+| S1 | 읽기 + 분류 UDF | 2,025ms | 1,828ms | −9.7% | |
+| S2 `strptime`·중복 키 hook | `classify` 정상 문서(µs/건) | 36.5 | 23.6 | −35% | 채택 |
+| S3 `$ref` 인라인 | 엄격 검증 경로(µs/건, 누락 필드·타입 오류) | 529·494 | 302·355 | −43%·−28% | 채택 |
+| S2+S3 | `classify` 혼합 평균(µs/건, 생성기 출력 20,000건) | 약 53 | 약 36 | −32% | |
+| S1+S2+S3 | 운영 경로(쓰기 제외) | 3,628ms | 3,102ms | −14.5% | |
+| S1+S2+S3 | 읽기 + 분류 UDF | 2,014ms | 1,390ms | −31% | |
+| S4 `get_json_object` 제거 | 운영 경로(쓰기 제외), S1~S3 대비 | 3,102ms | 3,052ms | −1.6% | 미채택, 되돌림 |
+
+- S1: 이미지에 `pyarrow==25.0.1`·`pandas==2.3.3`을 추가하고 `classify_udf`를 `useArrow=True`로 등록했다. 생성기 출력 3,000건과 Kafka 경계 입력 9건에서 Arrow UDF·pickle UDF·드라이버 직접 호출의 7개 필드가 모두 같다(`TestArrowUdf`). 첫 1회성 측정(워밍업 1회)의 −17%는 순서 효과가 섞인 값이었고, 교차 반복에서는 −6.6%다.
+- S2: `strptime`을 `datetime.fromisoformat(값[:-1])`로 바꿨다. 계약 pattern이 `YYYY-MM-DDTHH:MM:SS.mmmZ` 형식을 보장하므로 남는 판정은 Python datetime 표현 범위(연도 0000, 초 60, 시 24 등)뿐이다. 12개 경계 시각에서 두 방식의 판정이 같다. 중복 키 hook은 C `dict()`로 만든 뒤 키 수가 줄었을 때만 중복 키를 찾는다. 오류 메시지는 순서상 처음 다시 나온 키를 가리켜 기존과 같다.
+- S3: 프로파일에서 엄격 검증 경로 시간의 약 25%가 `$ref` 참조 해석(`referencing`)이었다. 계약의 `$ref` 14개는 모두 형제 키워드 없는 `#/$defs/...` 참조라, 엄격 검증기에만 대상 정의를 펼친 사본을 쓴다. 계약 파일과 1단 빠른 검증기는 바꾸지 않는다. 다른 형태의 `$ref`가 생기면 기동 시 실패한다. 정상 주문의 모든 경로에 키 삭제·타입 변경·빈 값·추가 필드 변형을 적용한 문서에서 `best_match` 오류의 키워드·경로·메시지가 원본 스키마 검증기와 같다(`TestInlinedRefs`, 오류 문서 467개).
+- S4: 분류 결과에 원본 `event_timestamp`를 담아 `get_json_object`를 없앴으나 차이가 측정 편차(±100ms 안팎) 안이라 선택 기준 2에 못 미쳐 되돌렸다.
+
+### 프로파일 판정: S1+S2+S3 (2026-11-20)
+
+- 원자료: [steady](../measurements/2026-11-20-spark-s13-steady.json), [step](../measurements/2026-11-20-spark-s13-step.json). 기준값은 [steady](../measurements/2026-11-19-baseline-steady.json)·[step](../measurements/2026-11-19-baseline-step.json)이다. 각 1회 실행했다. 생성기 run_id는 steady `7e9f312675304966abd9e780fe51166b`, step `f9a0ab2c52ed42b1af5713b7edb0eaf5`, Spark run_id는 steady `6ddc17f4-7345-444a-8711-fce10701c854`, step `841bf3b4-4ab7-4994-bba1-4cb164c64e5a`다.
+- Grafana 캡처: steady(2026-11-20 01:01:30~01:13:30 KST) [파이프라인 운영](../../images/2026-11-20-spark-s13-steady/pipeline.png)·[주문 현황](../../images/2026-11-20-spark-s13-steady/orders.png), step(01:12:51~01:26:51 KST) [파이프라인 운영](../../images/2026-11-20-spark-s13-step/pipeline.png)·[주문 현황](../../images/2026-11-20-spark-s13-step/orders.png).
+
+| 구간 | 트리거 평균 (기준 → 후보) | 트리거 p99 | 실처리량 EPS | 종단 간 p99 | ACK p95 100ms 이내 비율 |
+| --- | --- | --- | --- | --- | --- |
+| steady base 5,000 | 2,643 → 2,269ms | 3,266 → 2,704ms | 9,451 → 11,014 | 7.38 → 6.80초 | 100% → 100% |
+| steady peak 7,500 | 3,542 → 3,226ms | 4,976 → **5,955ms** | 10,558 → 11,559 | 8.06 → 8.56초 | 99.7% → **98.0%** |
+| step 8,000 | 3,869 → 3,404ms | 5,209 → 3,828ms | 10,305 → 11,731 | 8.70 → 7.97초 | 99.2% → 99.2% |
+| step 9,000 | 4,382 → 3,571ms | 5,845 → 4,700ms | 10,155 → 12,551 | 9.73 → 8.15초 | 93.2% → 97.5% |
+| step 10,000 | 4,532 → 3,740ms | 5,601 → 4,627ms | 10,903 → 13,300 | 9.23 → 8.41초 | 92.4% → 95.8% |
+| step 11,000 | 4,941 → 4,472ms | 5,642 → 6,237ms | 10,803 → 12,161 | 9.88 → 9.88초 | 72.3% → 79.8% |
+
+- 지속 용량: 10,000 EPS 단계까지 통과했다(목표 충족). 11,000 단계는 backlog 증가 추세(24.3건/초)로 실패했다. 실처리량은 단계마다 15~22% 늘었다.
+- 평시 피크: 트리거 평균은 9% 줄었으나 p99(5,955ms)가 목표 3,500ms를 넘었다. 구간 배치 59개 중 5초를 넘은 2개(batch 71: 5,115ms, 89: 5,854ms)가 p99를 정했다. 두 배치는 분류·계측 action이 3.0~3.2초로, 같은 크기의 다른 배치(1.6~1.9초)보다 길었다.
+- Spark CPU 상한에 걸린 주기 비율: steady 19.9% → 9.5%, step 23.6% → 11.6%. CPU 사용 시간은 steady 1,184초 → 985초, step 1,930초 → 1,528초다.
+- **메모리:** Spark `memory.peak`가 3,221,356,544B로 `mem_limit: 3g`(3,221,225,472B)에 닿았다. OOM kill은 0이다. steady 후반 `anon`은 2.99GB, `file`은 3~12MB로 기준값(`anon` 2.91GB, `file` 58~200MB)보다 page cache가 더 밀려났다. Arrow UDF로 Python 워커마다 pyarrow·pandas가 올라온 영향으로 추정한다. 평시 피크의 느린 배치 2개와의 관계는 확인하지 않았다. 선택 기준 4는 경계 상태다.
+- 판정: 선택 기준 3 중 지속 용량·종단 간 지연·공통 기준은 충족했다. 평시 피크 트리거 p99는 미충족이다. 다음 후보는 메모리 여유 확보(드라이버 힙 축소 또는 `mem_limit` 조정)와 느린 배치 원인 확인이다.
+
+### 메모리 분해 (2026-11-20)
+
+S1~S3 적용 이미지로 `steady.csv`를 4회 실행해 Spark 컨테이너 메모리 구성을 나눴다. 수집 스크립트는 [run_spark_mem.sh](../measurements/run_spark_mem.sh), 구간 요약은 [spark_mem_summary.py](../measurements/spark_mem_summary.py), NMT 요약은 [spark_nmt_summary.py](../measurements/spark_nmt_summary.py)다. 수집 항목은 `jstat -gc`(1초), Spark REST executors·cgroup `memory.stat`·프로세스 RSS(5초)다. 지연은 [analyze_profile.py](../measurements/analyze_profile.py)로 집계했다. 실행마다 새 `SPARK_CHECKPOINT_DIR`을 쓰고, Kafka backlog를 다 읽은 뒤 부하를 시작했다.
+
+| 실행 | 조건 | 생성기 run_id | Spark run_id | 원자료 | Grafana 캡처 (KST) |
+| --- | --- | --- | --- | --- | --- |
+| M1 | 기본 설정 | `8626d3ef2a2d47f691c950e1567d1b08` | `c94f2e3f-00bc-4efa-bc2e-b2117361166a` | [JSON](../measurements/2026-11-20-spark-mem-jstat.json) | 10:32:10~10:44:10 [파이프라인](../../images/2026-11-20-spark-mem-jstat/pipeline.png)·[주문](../../images/2026-11-20-spark-mem-jstat/orders.png) |
+| M2 | NMT 켬(`-XX:NativeMemoryTracking=summary`, `jcmd` 30초) | `7e669dd4a4404d60b6b24022c636d108` | `f045386b-85f7-4afa-8414-56229389a829` | [JSON](../measurements/2026-11-20-spark-mem-nmt.json) | 14:55:10~15:07:10 [파이프라인](../../images/2026-11-20-spark-mem-nmt/pipeline.png)·[주문](../../images/2026-11-20-spark-mem-nmt/orders.png) |
+| M3 | `MALLOC_ARENA_MAX=2` (JVM·Python 워커 모두) | `04967092b32f4b51a1329f4a8ff7696c` | `e06feed2-631b-45ea-9ec9-fff84d8943f7` | [JSON](../measurements/2026-11-20-spark-mem-arena2.json) | 15:30:57~15:42:57 [파이프라인](../../images/2026-11-20-spark-mem-arena2/pipeline.png)·[주문](../../images/2026-11-20-spark-mem-arena2/orders.png) |
+| M4 | M3 반복. 호스트 CPU 상위 프로세스 5초 기록 추가 | `0a557bf8b7d74f1c8431bbec257da7f0` | `c4f45b78-f3dc-482a-9156-9d3d63dea97e` | [JSON](../measurements/2026-11-20-spark-mem-arena2-2.json) | 16:12:49~16:24:49 [파이프라인](../../images/2026-11-20-spark-mem-arena2-2/pipeline.png)·[주문](../../images/2026-11-20-spark-mem-arena2-2/orders.png) |
+
+**메모리 (peak 구간 최대)**
+
+| 항목 | M1 | M2 | M3 | M4 |
+| --- | ---: | ---: | ---: | ---: |
+| `memory.peak` (컨테이너 시작 이후) | 3,222,913,024B | 3,221,360,640B | **3,117,785,088B** | 3,221,291,008B (부하 전 catch-up 중 도달) |
+| 부하 중 `memory.current` 최대 | 3,057MB | 3,072MB | 2,949MB | 3,072MB (warmup), 2,922MB (peak) |
+| OOM kill | 0 | 0 | 0 | 0 |
+| cgroup `anon` 최대 / `file` 최소 | 2,968 / 28MB | 3,023 / 19MB | 2,851 / 49MB | 2,762 / 106MB |
+| JVM RSS | 2,578MB | 2,560MB | 2,362MB | 2,276MB |
+| 힙 commit | 1,571MB | 1,445MB | 1,624MB | 1,598MB |
+| JVM RSS − 힙 commit | 1,007MB | 1,115MB | **738MB** | **678MB** |
+| 힙 사용 최대 / 최소(GC 직후) | 1,364 / 247MB | 1,301 / 231MB | 1,592 / 591MB | 1,398 / 239MB |
+| Old 최대 | 472MB | 506MB | 730MB | 563MB |
+| GC 시간 비율 / Full GC | 2.5% / 0 | 2.1% / 0 | 1.2% / 0 | 2.7% / 0 |
+| storage memory 사용 (최대 1,049MB) | 77MB | 72MB | 97MB | 103MB |
+| Python 워커 4개 RSS 합 | 556MB | 563MB | 582MB | 590MB |
+
+- 힙: 살아 있는 데이터는 250~500MB이고 GC 비율은 2% 안팎이다. 힙 commit은 1.4~1.6GB에 머물러 `-Xmx`를 1.5g로 낮춰도 줄어드는 양이 거의 없다.
+- M2 NMT committed 최대 합계는 2,013MB다(Java Heap 1,445, Metaspace 178, Code 127, GC 104, Symbol 42, Thread 37(182개), Class 30, Other 29, Arena Chunk 24, Compiler 22, NMT 18). direct buffer가 들어가는 Other가 29MB라 Arrow 버퍼는 원인이 아니다.
+- 부하 직후 idle 시점 1회 측정(원본 smaps는 보존하지 않음): JVM `RssAnon` 2,021MB, NMT committed 1,544MB로 NMT가 못 보는 메모리가 약 477MB다. 64MB 정렬 익명 영역이 66개, RSS 합 681MB이고 NMT malloc 추적분은 126MB다. 컨테이너가 보는 `nproc`이 8이라 glibc malloc arena 상한이 64개다. 해제된 메모리를 arena가 쥐고 있는 것으로 판단했다.
+- M3: `MALLOC_ARENA_MAX=2`로 JVM 힙 밖 메모리가 약 380MB 줄었고 `memory.peak`가 한도보다 약 100MB 낮아졌다. 대신 힙 commit이 약 180MB 늘었다. 부하 전 catch-up이 75배치(M2는 7배치)로 길어 G1이 힙을 키운 뒤 돌려주지 않은 것으로 추정하나 확인하지 않았다.
+- M4: 힙 밖 메모리는 678MB로 M3와 같은 수준이다. 부하 중 `memory.current` 최대는 3,072MB(warmup), peak 구간 2,922MB로 한도 안이었다. 다만 `memory.peak`는 부하 시작 전 catch-up(105배치, 배치당 55,000건) 중에 이미 한도에 닿았다. 힙 commit은 warmup 1,727MB에서 base 1,417MB로 줄어, G1이 힙을 돌려주는 것도 확인했다.
+
+**지연 (같은 `steady.csv`)**
+
+| 실행 | 구간 | 생성 EPS | ACK p95 100ms 이내 비율 | 트리거 평균 / p99 | 5초 초과 배치 | backlog 최대 | 종단 간 p99 | 호스트 사용 코어 평균 |
+| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| M1 | base | 4,733 | 91.1% | 4,375 / 9,770ms | 5 | 0 | 12.32초 | 4.50 |
+| M1 | peak | 7,350 | 92.6% | 4,406 / 11,545ms | 12 | 0 | 13.85초 | |
+| M2 | base | 4,986 | 100% | 2,764 / 5,354ms | 1 | 0 | 8.12초 | 3.39 |
+| M2 | peak | 7,488 | 100% | 3,309 / 4,115ms | 0 | 0 | 7.90초 | |
+| M3 | base | 4,979 | 99.4% | 2,674 / 5,546ms | 2 | 0 | 14.51초 | 4.01 |
+| M3 | peak | 6,988 | 76.9% | 4,867 / 14,909ms | 19 | 42,539 | 20.17초 | |
+| M4 | base | 4,986 | 100% | 2,585 / 3,456ms | 0 | 0 | 7.38초 | 3.32 |
+| M4 | peak | 7,469 | 99.0% | 3,393 / 4,387ms | 0 | 0 | 8.11초 | |
+
+- 같은 코드·같은 프로파일인데 평시 피크 트리거 p99가 4,115~14,909ms로 흩어졌다. 지연이 큰 실행(M1·M3)은 Spark와 무관한 생성기 ACK 지연도 함께 커졌고(M3 peak ACK p95 최대 1,828ms), 호스트 사용 코어도 높았다. 호스트 경합이 실행 간 편차의 주 원인으로 보인다. 경합 원인 프로세스는 수집하지 않았다.
+- M1은 arena 기본 설정인데도 M3만큼 느렸다. M3의 지연 악화를 `MALLOC_ARENA_MAX=2` 탓으로 볼 근거는 없다. arena 축소가 malloc 경합을 늘렸을 가능성도 배제하지 못했다.
+- M4는 M3와 같은 조건인데 평시 피크 트리거 p99가 4,387ms, 5초 초과 배치 0개, 생성기 ACK p95 100ms 이내 99.0%였다. 호스트 사용 코어 평균은 3.32로 M2(3.39)와 비슷했다. M3의 지연 악화는 `MALLOC_ARENA_MAX=2`가 아니라 실행 당시 호스트 경합 때문으로 판단한다. 호스트 top 기록에서 CPU 20% 이상 쓴 WSL 프로세스는 생성기(3회)·Claude Code(1회)뿐이었고, Docker 컨테이너 쪽은 이 기록에 보이지 않는다.
+- 판정: `MALLOC_ARENA_MAX=2`는 힙 밖 메모리를 약 380~440MB 줄이고, 지연을 늘린다는 근거는 없다. 채택 후보로 둔다. 남은 위험은 catch-up처럼 배치 상한(55,000건)으로 연속 처리할 때 `memory.peak`가 여전히 3g에 닿는 점이다. 평시 피크 트리거 p99는 M2·M4 모두 4.1~4.4초로 목표 3,500ms를 넘는다.
+
+### JVM 튜닝 실험 (2026-11-20)
+
+[메모리 분해](#메모리-분해-2026-11-20) 결과로 후보를 정했다. 대상은 driver 겸 executor인 JVM 1개다(`local[3]`, `--driver-memory 2g`, 컨테이너 `mem_limit: 3g`).
+
+**메모리 후보**
+
+| 후보 | 현재 | 측정 근거 | 기대 효과 | 위험 |
+| --- | --- | --- | --- | --- |
+| J1 `MALLOC_ARENA_MAX=2` | 미설정(arena 상한 64) | M3·M4에서 JVM 힙 밖 메모리 1,007~1,115MB → 678~738MB | −380~440MB | 스레드 간 malloc 경합. M4에서 지연 영향 없음 |
+| J2 `--driver-memory` 2g → 1.5g | 2g | 살아 있는 데이터 250~560MB, 힙 commit은 catch-up 중 1,727MB까지 늘어남 | catch-up 중 최대 약 200MB | GC 빈도 증가, 큰 배치에서 Full GC |
+| J3 jemalloc(`LD_PRELOAD`) | glibc malloc | 미측정 | J1과 같거나 더 큼 | 이미지 변경, 호환 검증 필요 |
+| J4 `-XX:ReservedCodeCacheSize` 축소 | 기본 240MB | NMT Code 127MB | 수십 MB | 코드 캐시가 차면 JIT 중단 |
+| J5 `-XX:MaxMetaspaceSize`·`-XX:MaxDirectMemorySize` 상한 | 없음 | Metaspace 178MB, Other(direct) 29MB | 절감 없음. 폭주 방지 | 상한이 낮으면 OOM |
+| J6 `-Xss`·스레드 수 | 182개 | NMT Thread 37MB | 수 MB | 스택 부족 |
+
+**GC·지연 후보**
+
+| 후보 | 현재 | 측정 근거 | 기대 효과 | 위험 |
+| --- | --- | --- | --- | --- |
+| J7 GC 로그(`-Xlog:gc`) | 꺼짐 | GC 시간 비율 1.2~2.7%. 느린 배치와 GC 정지의 관계는 미확인 | 느린 배치 원인 진단 | 로그 파일 증가 |
+| J8 `-XX:MaxGCPauseMillis` | G1 기본 200ms | GC 비율이 낮아 근거 약함 | J7 결과로 정한다 | 처리량 감소 |
+| J9 `-Xms`=`-Xmx` | 미설정 | 힙 commit 1,417~1,727MB 변동 | 힙 크기 조정 비용 제거 | 상시 최대 점유. J2와 상충 |
+| J10 `G1PeriodicGCInterval` | 꺼짐 | 스트리밍은 유휴 구간이 짧다 | 거의 없음 | 주기 GC 추가 |
+
+**JVM 밖 같은 예산 항목**: Python 워커 4개 RSS 합 556~593MB(P1), `mem_limit` 3.5g 상향(P2, 호스트 자원 예산 변경 필요), `spark.memory.fraction`(P3, storage 사용 최대 103MB/1,049MB이고 논리 한도라 RSS 절감이 거의 없다).
+
+**진행 순서**
+
+1. J1을 Compose에 반영한다. M3·M4로 측정을 마쳤다. 2026-11-20 반영했다(`compose.yaml` spark `environment`).
+2. J1 기준으로 J7 GC 로그를 켜고 `steady.csv`를 실행한다. 평시 피크의 느린 배치(트리거 3,500ms 초과)와 GC 정지 시각을 대조한다. GC 로그는 측정용 override로만 켠다.
+3. J1+J7 기준으로 J2(`--driver-memory 1536m`)를 실행한다. 2026-11-20 채택했다. catch-up과 부하 구간의 `memory.peak`, GC 횟수·정지 시간, 트리거 p99를 2단계와 비교한다.
+4. 3단계 뒤에도 catch-up 중 `memory.peak`가 3g에 닿으면 J3 또는 P2를 검토한다. J4~J6·J8~J10은 2·3단계 결과가 근거를 줄 때만 실행한다.
+
+**선택 기준**
+
+- 메모리: 부하 구간 `memory.current` 최대가 기준보다 낮고 OOM kill이 0이다. catch-up 중 `memory.peak`도 함께 기록한다.
+- 지연: 평시 피크 트리거 p99·종단 간 p99가 기준보다 나빠지지 않는다. 같은 실행의 생성기 ACK p95 100ms 이내 비율이 99% 미만이거나 호스트 사용 코어 평균이 4를 넘으면 호스트 경합 실행으로 보고 다시 측정한다(M3 사례).
+- 실행마다 새 `SPARK_CHECKPOINT_DIR`을 쓰고, Kafka 끝 offset까지 catch-up한 뒤 부하를 시작한다.
+
+### JVM 튜닝 결과 (2026-11-20)
+
+| 실행 | 조건 | 생성기 run_id | Spark run_id | 원자료 | Grafana 캡처 (KST) |
+| --- | --- | --- | --- | --- | --- |
+| J7 | J1 + GC 로그(`SPARK_SUBMIT_OPTS=-Xlog:gc:file=/tmp/gc.log:time,uptime`, 측정용 override) | `2460c8919eba46f9a9b483e8ab9dfaf6` | `b95059b6-2119-44b3-ae8b-3b84e0f25985` | [JSON](../measurements/2026-11-20-spark-jvm-j7-gclog.json) | 17:55:45~18:07:45 [파이프라인](../../images/2026-11-20-spark-jvm-j7-gclog/pipeline.png)·[주문](../../images/2026-11-20-spark-jvm-j7-gclog/orders.png) |
+| J2 | J1 + GC 로그 + `--driver-memory 1536m` | `07e29c5e109142fa978f5201ecf68ad3` | `f4dbe991-5f3d-45c3-bfdb-73870dd0c244` | [JSON](../measurements/2026-11-20-spark-jvm-j2-xmx1536m.json) | 18:14:33~18:26:33 [파이프라인](../../images/2026-11-20-spark-jvm-j2-xmx1536m/pipeline.png)·[주문](../../images/2026-11-20-spark-jvm-j2-xmx1536m/orders.png) |
+
+GC 정지와 배치 대조는 [spark_gc_batches.py](../measurements/spark_gc_batches.py)로 했다. Kafka 보존 기간이 지나 토픽 earliest와 latest가 같아 J7은 catch-up 없이 시작했다.
+
+**J7 (GC 로그)**
+
+| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | backlog 최대 | 종단 간 p99 | 호스트 사용 코어 평균 |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| base | 4,939 | 98.1% | 3,396 / 4,617ms | 0 | 0 | 8.19초 | 4.40 |
+| peak | 7,246 | 87.0% | 4,522 / 9,428ms | 14 | 8,434 | 13.72초 | |
+
+- 생성기 ACK 비율 87.0%, 호스트 사용 코어 평균 4.40으로 [선택 기준](#jvm-튜닝-실험-2026-11-20)의 호스트 경합 실행이다. 지연 수치는 판정에 쓰지 않는다. 호스트 top에서 CPU 30% 이상 표본은 생성기 100회, `MainThread` 12회, Claude Code 10회, `docker`·`codex` 각 2회였다. Docker 컨테이너 안 프로세스는 보이지 않는다.
+- 메모리: 부하 중 `memory.current` 최대 2,870MB, 컨테이너 시작 이후 `memory.peak` 3,036,024,832B로 한도 안이다. 힙 commit 최대 1,508MB, JVM RSS 최대 2,161MB(힙 밖 약 650MB), Python 워커 합 603MB, OOM kill 0.
+- GC: 워밍업 이후 정지 합 11.6초(805회). 종류별로 Remark 124회·합 5,328ms·최대 156ms, Humongous Allocation으로 시작한 Young 181회·합 2,358ms·최대 110ms, Mixed 125회·합 1,334ms, Normal Young 125회·합 1,204ms다. Full GC는 0이다.
+- 배치 대조(워밍업 이후 95배치): 트리거 3,500ms 초과 57배치의 배치당 GC 정지 합은 평균 141ms(최대 496ms), 3,500ms 이하 38배치는 평균 90ms(최대 193ms)다. 느린 배치 시간의 약 3%라 GC는 느린 배치의 주원인이 아니다. 가장 느린 배치(81: 9,428ms)의 GC 정지 합은 344ms다.
+- Humongous 할당(힙 리전 절반 이상 객체)이 GC 주기를 자주 시작시킨다. 힙 2g의 G1 리전 크기는 1MB다. `-XX:G1HeapRegionSize` 상향은 GC 정지 합(배치당 0.1초 안팎)이 작아 지연 목표에 대한 효과가 작을 것으로 보고 후보에 넣지 않는다.
+- 판정: J7 진단 목적은 달성했다. 평시 피크 트리거 p99 초과의 원인은 GC가 아니다. 남은 원인 후보는 호스트 CPU 경합과 배치 처리 자체 시간(분류·JDBC 쓰기)이다. J8(`MaxGCPauseMillis`)은 근거가 없어 실행하지 않는다.
+
+**J2 (`--driver-memory 1536m`)**
+
+비교 기준은 같은 J1 조건의 깨끗한 실행 M4(`--driver-memory 2g`)다.
+
+| 항목 | M4 (2g) | J2 (1536m) |
+| --- | ---: | ---: |
+| catch-up 배치 수 / catch-up 중 `memory.peak` | 105 / 3,221,291,008B (한도) | 66 / **2,815,111,168B** |
+| 부하 중 `memory.current` 최대 | 3,072MB | **2,649MB** |
+| peak 구간 `anon` 최대 / `file` 최소 | 2,762 / 106MB | 2,499 / 100MB |
+| 힙 commit 최대 (부하 중) | 1,727MB | 1,409MB (GC 로그상 catch-up 포함 1,424MB) |
+| JVM RSS 최대 (peak) | 2,276MB | 2,024MB |
+| GC 시간 비율 (peak) / Full GC | 2.7% / 0 | 2.5% / 0 |
+| base 트리거 평균 / p99 | 2,585 / 3,456ms | 2,840 / 3,710ms |
+| peak 트리거 평균 / p99 | 3,393 / 4,387ms | 3,498 / 4,687ms |
+| peak 5초 초과 배치 / backlog 최대 | 0 / 0 | 0 / 0 |
+| peak 종단 간 p99 | 8.11초 | 8.11초 |
+| peak 실처리량 | 10,999 EPS | 10,666 EPS |
+| 생성기 ACK p95 100ms 이내 (peak) / 호스트 사용 코어 평균 | 99.0% / 3.32 | 99.3% / 3.62 |
+
+- 메모리: 부하 중 최대가 약 420MB 줄었고 catch-up 중에도 3g에 닿지 않았다. catch-up 배치 수가 M4(105)보다 적어 catch-up 비교는 같은 조건이 아니다. GC 로그상 catch-up 중 Full GC·evacuation 실패는 0이다.
+- GC: 워밍업 이후 정지 합 11.3초(923회), 최대 정지 78ms(Remark)다. 힙이 작아져 Remark 최대가 J7 156ms에서 78ms로 줄었다. 트리거 3,500ms 초과 25배치의 배치당 GC 정지 평균 145ms, 이하 72배치 106ms로 J7과 같은 결론이다.
+- 지연: peak 트리거 p99가 M4보다 300ms(7%) 길다. 깨끗한 실행 사이 편차(M2 4,115ms, M4 4,387ms)와 같은 크기라 1회 측정으로 악화를 구분할 수 없다. 종단 간 p99는 같고 5초 초과 배치는 둘 다 0이다.
+- 판정: 채택. 3g 한도 안 여유를 확보했고, 지연 악화는 측정 편차 범위 안이다. `SPARK_DRIVER_MEMORY`를 `1536m`으로 바꾼다. catch-up 중 `memory.peak`가 3g 아래라 진행 순서 4(J3·P2)는 실행하지 않는다.
+- 남은 목표: 평시 피크 트리거 p99 ≤ 3,500ms는 J1·J2 적용 후에도 4.4~4.7초로 미충족이다. GC·메모리가 원인이 아니므로 배치 처리 자체 시간(분류·JDBC 쓰기)을 다시 분해한다.
+
+### 배치 시간 재분해 (2026-11-20)
+
+J1·J2 적용 상태(`MALLOC_ARENA_MAX=2`, `--driver-memory 1536m`)에서 배치 시간을 다시 나눴다. 원자료: [2026-11-20-spark-batch-breakdown.json](../measurements/2026-11-20-spark-batch-breakdown.json). Grafana 캡처(18:35:17~18:47:17 KST): [파이프라인 운영](../../images/2026-11-20-spark-batch-breakdown/pipeline.png), [주문 현황](../../images/2026-11-20-spark-batch-breakdown/orders.png). 생성기 run_id `a71593c27129460f9b92805e1e30680e`, Spark run_id `b9ac80db-93a9-43e2-baed-0556eac75126`.
+
+**입력 건수와 배치 시간(J2 실행, catch-up 포함 185배치, 7,331~54,999건)**
+
+| 항목 | 고정비 | 1,000건당 | 25,000건 | 37,000건 | 55,000건 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 트리거 전체 | 1,519ms | 56.0ms | 2,919ms | 3,591ms | 4,599ms |
+| 분류·계측 | 325ms | 33.1ms | 1,154ms | 1,551ms | 2,148ms |
+| 정상 출력 | 976ms | 20.8ms | 1,496ms | 1,746ms | 2,120ms |
+| DLQ 출력 | 132ms | 2.0ms | 181ms | 205ms | 240ms |
+
+- 평시 피크(7,500 EPS × 5초 ≈ 37,000건) 배치의 **평균**이 이미 약 3.6초다. p99 3,500ms 목표는 평균부터 줄여야 한다.
+- 고정비 1.5초 중 약 1초가 정상 출력 action이다.
+
+**평시 피크 배치 단계(위 실행, peak 구간 60배치, 평균 37,106건)**
+
+Spark REST의 job 제출·완료 시각과 콜백 계측 시각으로 나눴다. 배치당 job은 6개다(지표 집계 3, 중복 제거 셔플 map 1, JDBC save 1, DLQ save 1).
+
+| 단계 | 평균 | p50 | 최대 | 내용 |
+| --- | ---: | ---: | ---: | --- |
+| 트리거 → 콜백 진입 | 58ms | 47 | 148 | offset 조회·계획 |
+| 콜백 진입 → 첫 job | **216ms** | 208 | 392 | driver: 분류 DataFrame 구성·persist |
+| 지표 집계 job | 1,362ms | 1,326 | 2,058 | Kafka 읽기·분류 UDF·캐시·집계 |
+| 집계 → 정상 출력 첫 job | **445ms** | 460 | 682 | driver: 정상 출력 DataFrame 구성, JDBC 연결·테이블 확인 |
+| 중복 제거 셔플 map job | 468ms | 449 | 971 | 캐시 읽기·`from_json`·부분 중복 제거 |
+| JDBC save job | 819ms | 731 | 2,902 | 셔플 읽기·행 바인딩·INSERT 3개 병렬 |
+| 정상 출력 → DLQ job | **119ms** | 118 | 166 | driver: DLQ DataFrame 구성 |
+| DLQ save job | 91ms | 80 | 394 | Kafka DLQ 쓰기 |
+| 콜백 종료 → 트리거 종료 | 38ms | 35 | 83 | offset 커밋 |
+| 트리거 전체 | 3,655ms | 3,571 | 5,886 | |
+
+- job이 돌지 않는 driver 시간이 배치당 약 880ms(24%)다.
+- ClickHouse INSERT 서버 처리 시간은 평균 320ms(p95 약 470ms), INSERT당 약 10,500행이다. JDBC 메타데이터 조회(`SELECT 1|* FROM silver.order_events WHERE 1=0`)는 서버에서 각 4~7ms다.
+
+**driver 시간 벤치** ([bench_spark_driver.py](../measurements/bench_spark_driver.py), 37,200건 고정 구간, 워밍업 3회 후 7회 중앙값, 1회성 컨테이너)
+
+| 단계 | 중앙값 |
+| --- | ---: |
+| 분류 DataFrame 구성(`classify_batch` + `persist`) | 152ms |
+| 정상 출력 DataFrame 구성 전체 | 357ms |
+| └ `select_orders` | 279ms |
+| └ 필터 + `from_json` | 20ms |
+| └ 배치 내 중복 제거 / 추적 컬럼 | 5ms / 23ms |
+| Catalyst 분석 / 최적화 / 물리 계획 | 0.1ms / 16ms / 6ms |
+| JDBC 연결 + 테이블 확인 2회 | 23ms |
+| DLQ DataFrame 구성 / 물리 계획 | 61ms / 7ms |
+
+- `select_orders` 1회에 py4j 호출이 약 1,745번 일어난다(cProfile). 컬럼 식 31개 구성이 180ms, `select` 자체는 15ms다. PySpark Column 연산마다 JVM 왕복과 호출 위치 수집(`_capture_call_site`)·활성 세션 조회가 붙는다. 이 식들은 배치마다 같은데 매 배치 다시 만든다.
+- JDBC 연결·Catalyst 계획은 원인이 아니다.
+
+**분류 구성 분리 벤치 (2026-11-23)** ([원자료](../measurements/2026-11-23-spark-classify-persist.json), 같은 벤치·같은 조건, 스트리밍 컨테이너 정지 상태. 토픽이 retention으로 비어 생성기로 45,000건을 넣고 끝 구간 37,200건을 읽었다)
+
+| 단계 | 중앙값 | 7회 범위 |
+| --- | ---: | ---: |
+| 분류 구성 전체(`classify_batch` + `persist`, 기존 항목) | 186ms | 157~408ms |
+| └ `classify_batch` 식 구성 | 148ms | 109~271ms |
+| └ `persist()` | 77ms | 57~255ms |
+
+- 이번 실행은 전 항목이 11-20보다 느렸다(정상 출력 구성 472ms vs 357ms, `select_orders` 351ms vs 279ms). 절대값보다 비율로 본다.
+- 분류 구성 중 약 1/3이 `persist()`(캐시 등록 시 계획 분석)다. Column 식 재사용으로 줄일 수 없는 비용이다.
+- 식 구성 중 이벤트 시각 범위 식(`_event_time_window`)은 배치마다 기준 시각 리터럴이 바뀌므로 그대로 재사용할 수 없다. S5에서 분류 쪽 기대 효과는 식 구성 시간 중 고정 부분으로 한정된다.
+
+**call-site 수집 끄기 대조 (2026-11-23)** ([원자료](../measurements/2026-11-23-spark-dataframe-debugging.json), 같은 벤치·같은 구간, `spark-submit --conf spark.python.sql.dataFrameDebugging.enabled=true|false` 연속 실행)
+
+PySpark 4.2는 `functions`·`Column` 메서드 호출마다 `_with_origin`(`pyspark/errors/utils.py`)으로 활성 세션·설정 조회, 호출 스택 수집, JVM origin 설정·해제를 py4j로 한다. 오류 메시지에 Python 호출 위치를 붙이기 위한 것이다. 위 설정이 `false`면 건너뛴다.
+
+| 단계 | true | false |
+| --- | ---: | ---: |
+| 분류 구성 전체 / 식 구성 / `persist()` | 144 / 109 / 61ms | 107 / 65 / 57ms |
+| 정상 출력 구성 전체 | 301ms | 111ms |
+| └ `select_orders` | 263ms | 95ms |
+| DLQ 구성 | 69ms | 40ms |
+| Catalyst 계획·JDBC 확인 | 변화 없음 | 변화 없음 |
+
+- driver 구성 시간이 배치당 약 256ms 줄었다(분류 37, 정상 출력 190, DLQ 29). 설정 한 줄이며 코드는 바뀌지 않는다.
+- 대가: DataFrame API 오류 메시지의 Python 호출 위치(파일:줄) 문맥이 빠진다. 분류 결과·쓰기 동작은 바뀌지 않는다.
+- 남는 `select_orders` 95ms는 Column 식 재사용(S5)으로 추가로 줄일 수 있다.
+
+**다음 후보**
+
+| 후보 | 변경 | 기대 효과(평시 피크 배치당) | 분류 결과 영향 |
+| --- | --- | --- | --- |
+| S5a | `spark.python.sql.dataFrameDebugging.enabled=false`로 PySpark call-site 수집을 끈다 | driver 시간 약 0.26초(벤치). 2026-11-23 채택, steady에서 약 0.45초 감소([검증](#s5a-적용-steady-검증-2026-11-23)) | 없음. 오류 메시지의 Python 호출 위치만 빠진다 |
+| S5 | 배치마다 같은 Column 식(정상 출력 컬럼 31개, DLQ 메시지 구조체, 분류 컬럼)을 세션 시작 때 한 번 만들고 재사용한다 | driver 시간 약 0.3~0.45초 | 없음. 같은 식을 재사용한다. 기존 테스트로 확인한다 |
+| S6 | 배치 내 중복 제거 셔플 비용(map job 468ms) 확인 | 측정 후 결정 | 중복 제거 규칙은 바꾸지 않는다 |
+
+- S5를 적용해도 평시 피크 평균은 약 3.2~3.3초로 예상되어 p99 3,500ms 충족은 불확실하다. 남는 비용은 건수 비례(분류 33ms/1,000건, 정상 출력 21ms/1,000건)다.
+- 이 실행의 평시 피크 트리거 p99는 5,886ms(5초 초과 1개)였다. 생성기 ACK p95 100ms 이내 비율이 98.65%라 [선택 기준](#jvm-튜닝-실험-2026-11-20)상 호스트 경합 실행에 해당해 지연 판정에는 쓰지 않는다.
+
+### S5a 적용 steady 검증 (2026-11-23)
+
+`build_spark`에 `spark.python.sql.dataFrameDebugging.enabled=false`를 넣었다(J1·J2 유지). Spark UI 환경 탭에서 값이 `false`임을 확인했다. 스트리밍 테스트 358개가 통과했다. 새 checkpoint `/opt/spark/checkpoints/s5a-steady-20261123`로 시작했고, 토픽에 남아 있던 벤치용 45,000건을 batch 0에서 다 읽은 뒤 부하를 걸었다. 수집은 [run_spark_mem.sh](../measurements/run_spark_mem.sh)로 했다. 단계 분해는 [spark_batch_phases.py](../measurements/spark_batch_phases.py)로 했다. 이 스크립트는 이번에 저장소에 추가했다. 11-20 실행 원자료는 ClickHouse TTL로 지워져서 이 스크립트를 11-20 실행에 다시 돌려 대조하지는 못했다.
+
+| 실행 | 생성기 run_id | Spark run_id | 원자료 | Grafana 캡처 (KST) |
+| --- | --- | --- | --- | --- |
+| S5a | `df5bd47bf1114e15ae35eaeb3d0a417c` | `fc4221ad-2177-4323-86f1-348158196971` | [JSON](../measurements/2026-11-23-spark-s5a-steady.json) | 10:43:33~10:55:33 [파이프라인](../../images/2026-11-23-spark-s5a-steady/pipeline.png)·[주문](../../images/2026-11-23-spark-s5a-steady/orders.png) |
+
+| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | backlog 최대 | 종단 간 p99 | 판정 |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | --- |
+| base | 4,996 | 100% | 2,231 / 2,742ms | 0 | 0 | 6.95초 | 통과 |
+| peak | 7,490 | 100% | 2,879 / **3,659ms** | 0 | 0 | 7.50초 | 트리거 p99 미달(목표 3,500ms) |
+
+- 호스트 경합이 없는 실행이다. 호스트 사용 코어 평균은 3.09였다. Spark 시도 122회가 모두 성공했다. silver 행 3,221,332건의 `event_id`는 모두 고유했다. OOM kill은 0, `memory.peak`는 2,636,042,240B였다.
+
+**평시 피크 배치 단계(60배치, 평균 37,304건) — 11-20 실행과 비교**
+
+| 단계 | 11-20 평균 | 11-23 평균 |
+| --- | ---: | ---: |
+| 트리거 전체 | 3,655ms | 2,882ms |
+| 콜백 진입 → 첫 job (driver) | 216ms | 106ms |
+| 집계 → 정상 출력 첫 job (driver) | 445ms | 132ms |
+| 정상 출력 → DLQ job (driver) | 119ms | 72ms |
+| driver 시간 합(트리거 − job 구간) | 약 880ms | 431ms |
+| 지표 집계 job | 1,362ms | 1,258ms |
+| 중복 제거 셔플 map job | 468ms | 380ms |
+| JDBC save job | 819ms | 731ms |
+
+- driver 시간은 배치당 약 450ms 줄었다. 벤치에서 예상한 256ms보다 크다. 11-20 실행은 호스트 경합이 있었기 때문에 py4j 왕복도 더 느렸을 것으로 본다.
+- job 구간도 300ms가량 줄었다. 하지만 S5a는 job 안의 실행을 바꾸지 않는다. 이 차이는 호스트 경합 차이로 보고 S5a 효과에 넣지 않는다.
+- 판정: S5a를 채택한다. 평시 피크 트리거 p99는 3,659ms로 목표 3,500ms에 159ms 미달이다. 평균은 2,882ms다. 남은 비용은 지표 집계 job 1.26초(분류 UDF), JDBC save 0.73초, 중복 제거 셔플 0.38초다.
 
 ## 완료 기준
 

@@ -1,0 +1,1412 @@
+{
+ "conditions": {
+  "profile": "steady.csv",
+  "spark": "local[3], driver -Xmx2g, mem_limit 3g, cpus 4",
+  "spark_env": "SPARK_SUBMIT_OPTS=-XX:NativeMemoryTracking=summary, MALLOC_ARENA_MAX 미설정",
+  "checkpoint": "/opt/spark/checkpoints/mem-nmt-steady-20261120 (catch-up 7 batch 후 시작)",
+  "sampling": "jstat 1초, REST·cgroup·RSS 5초, jcmd VM.native_memory 30초"
+ },
+ "memory_by_segment": {
+  "warmup": {
+   "heap_used_mb": {
+    "max": 1101,
+    "min": 222,
+    "avg": 622
+   },
+   "old_used_mb_max": 347,
+   "heap_committed_mb_max": 1342,
+   "gc": {
+    "young": 125,
+    "full": 0,
+    "concurrent": 66,
+    "gc_sec": 1.68,
+    "gc_ratio": 0.0141
+   },
+   "storage": {
+    "used_mb_max": 31.1,
+    "max_mb": 1049,
+    "disk_used_max": 0,
+    "peak_jvm_heap_mb": 873,
+    "peak_jvm_offheap_mb": 303
+   },
+   "cgroup_mb": {
+    "anon_max": 2789,
+    "anon_min": 1900,
+    "file_max": 78,
+    "file_min": 28,
+    "current_max": 2881,
+    "current_min": 1943
+   },
+   "rss_mb_max": {
+    "java": 2382,
+    "n_java": 1,
+    "py_main": 130,
+    "n_py_main": 1,
+    "py_workers": 535,
+    "n_py_workers": 4
+   }
+  },
+  "base": {
+   "heap_used_mb": {
+    "max": 1122,
+    "min": 205,
+    "avg": 482
+   },
+   "old_used_mb_max": 468,
+   "heap_committed_mb_max": 1352,
+   "gc": {
+    "young": 215,
+    "full": 0,
+    "concurrent": 112,
+    "gc_sec": 3.33,
+    "gc_ratio": 0.0186
+   },
+   "storage": {
+    "used_mb_max": 42.4,
+    "max_mb": 1049,
+    "disk_used_max": 0,
+    "peak_jvm_heap_mb": 881,
+    "peak_jvm_offheap_mb": 322
+   },
+   "cgroup_mb": {
+    "anon_max": 2810,
+    "anon_min": 2291,
+    "file_max": 78,
+    "file_min": 66,
+    "current_max": 2900,
+    "current_min": 2386
+   },
+   "rss_mb_max": {
+    "java": 2426,
+    "n_java": 1,
+    "py_main": 128,
+    "n_py_main": 1,
+    "py_workers": 546,
+    "n_py_workers": 4
+   }
+  },
+  "peak": {
+   "heap_used_mb": {
+    "max": 1301,
+    "min": 231,
+    "avg": 608
+   },
+   "old_used_mb_max": 506,
+   "heap_committed_mb_max": 1445,
+   "gc": {
+    "young": 386,
+    "full": 0,
+    "concurrent": 190,
+    "gc_sec": 6.14,
+    "gc_ratio": 0.0205
+   },
+   "storage": {
+    "used_mb_max": 72.3,
+    "max_mb": 1049,
+    "disk_used_max": 0,
+    "peak_jvm_heap_mb": 1285,
+    "peak_jvm_offheap_mb": 336
+   },
+   "cgroup_mb": {
+    "anon_max": 3023,
+    "anon_min": 2361,
+    "file_max": 79,
+    "file_min": 19,
+    "current_max": 3072,
+    "current_min": 2430
+   },
+   "rss_mb_max": {
+    "java": 2560,
+    "n_java": 1,
+    "py_main": 126,
+    "n_py_main": 1,
+    "py_workers": 563,
+    "n_py_workers": 4
+   }
+  },
+  "tail": {
+   "heap_used_mb": {
+    "max": 770,
+    "min": 306,
+    "avg": 360
+   },
+   "old_used_mb_max": 458,
+   "heap_committed_mb_max": 1238,
+   "gc": {
+    "young": 8,
+    "full": 0,
+    "concurrent": 4,
+    "gc_sec": 0.12,
+    "gc_ratio": 0.0042
+   },
+   "storage": {
+    "used_mb_max": 41.0,
+    "max_mb": 1049,
+    "disk_used_max": 0,
+    "peak_jvm_heap_mb": 1285,
+    "peak_jvm_offheap_mb": 340
+   },
+   "cgroup_mb": {
+    "anon_max": 2712,
+    "anon_min": 2474,
+    "file_max": 37,
+    "file_min": 32,
+    "current_max": 2782,
+    "current_min": 2536
+   },
+   "rss_mb_max": {
+    "java": 2290,
+    "n_java": 1,
+    "py_main": 102,
+    "n_py_main": 1,
+    "py_workers": 522,
+    "n_py_workers": 4
+   }
+  }
+ },
+ "spark_cgroup": {
+  "cg_before": {
+   "memory_peak": 2758369280,
+   "oom_kill": 0
+  },
+  "cg_after": {
+   "memory_peak": 3221360640,
+   "oom_kill": 0
+  }
+ },
+ "profile_report": {
+  "profile": "apps/log_generator/profiles/steady.csv",
+  "t0_utc": "2026-11-20 05:55:40.547",
+  "generator_run_ids": [
+   "7e669dd4a4404d60b6b24022c636d108"
+  ],
+  "spark_run_id": "f045386b-85f7-4afa-8414-56229389a829",
+  "segments": [
+   {
+    "label": "base",
+    "target_eps": 5000,
+    "start_sec": 0,
+    "end_sec": 300,
+    "judged_from_sec": 120,
+    "producer_rows": 143,
+    "generated_eps": 4986,
+    "acked_eps": 4985,
+    "ack_p95_max_ms": 46.9,
+    "ack_p95_over_limit_rows": 0,
+    "ack_p95_ok_ratio": 1.0,
+    "queue_max": 357,
+    "batches": 35,
+    "input_rows": 872121,
+    "trigger_avg_ms": 2764,
+    "trigger_p99_ms": 5354,
+    "trigger_max_ms": 5354,
+    "trigger_over_5s": 1,
+    "throughput_eps": 9014,
+    "backlog_max": 0,
+    "backlog_last60_max": 0,
+    "backlog_slope_per_sec": 0.0,
+    "backlog_carried_batches": 0,
+    "e2e_sec": {
+     "rows": 577898,
+     "p50": 4.79,
+     "p95": 7.08,
+     "p99": 8.12,
+     "max": 9.53,
+     "over10": 0
+    },
+    "judgement": {
+     "generation": true,
+     "trigger_p99": false,
+     "e2e_p99": true,
+     "backlog": true
+    }
+   },
+   {
+    "label": "peak",
+    "target_eps": 7500,
+    "start_sec": 300,
+    "end_sec": 600,
+    "judged_from_sec": 300,
+    "producer_rows": 299,
+    "generated_eps": 7488,
+    "acked_eps": 7488,
+    "ack_p95_max_ms": 45.5,
+    "ack_p95_over_limit_rows": 0,
+    "ack_p95_ok_ratio": 1.0,
+    "queue_max": 628,
+    "batches": 59,
+    "input_rows": 2209085,
+    "trigger_avg_ms": 3309,
+    "trigger_p99_ms": 4115,
+    "trigger_max_ms": 4115,
+    "trigger_over_5s": 0,
+    "throughput_eps": 11315,
+    "backlog_max": 0,
+    "backlog_last60_max": 0,
+    "backlog_slope_per_sec": 0.0,
+    "backlog_carried_batches": 0,
+    "e2e_sec": {
+     "rows": 1256634,
+     "p50": 5.23,
+     "p95": 7.5,
+     "p99": 7.9,
+     "max": 8.33,
+     "over10": 0
+    },
+    "judgement": {
+     "generation": true,
+     "trigger_p99": false,
+     "e2e_p99": true,
+     "backlog": true
+    }
+   }
+  ],
+  "common": {
+   "generated": 3742901,
+   "acked": 3742901,
+   "silver_rows": 2678652,
+   "silver_uniq_event_id": 2678652,
+   "spark_attempts": [
+    {
+     "status": "succeeded",
+     "n": 129
+    }
+   ],
+   "spark_runs_in_query": 1,
+   "host_cpu_busy_cores": {
+    "avg": 3.39,
+    "p95": 5.46,
+    "max": 6.87
+   },
+   "host_stalls": []
+  },
+  "batches": [
+   {
+    "batch_id": 0,
+    "offset_sec": -345.6,
+    "trigger_ms": 20511,
+    "input_rows": 54998,
+    "backlog": 338879,
+    "k2c_p95": 127578
+   },
+   {
+    "batch_id": 1,
+    "offset_sec": -325.1,
+    "trigger_ms": 8461,
+    "input_rows": 54998,
+    "backlog": 283881,
+    "k2c_p95": 136025
+   },
+   {
+    "batch_id": 2,
+    "offset_sec": -316.6,
+    "trigger_ms": 5476,
+    "input_rows": 54999,
+    "backlog": 228882,
+    "k2c_p95": 133449
+   },
+   {
+    "batch_id": 3,
+    "offset_sec": -311.1,
+    "trigger_ms": 6153,
+    "input_rows": 54998,
+    "backlog": 173884,
+    "k2c_p95": 127839
+   },
+   {
+    "batch_id": 4,
+    "offset_sec": -305.0,
+    "trigger_ms": 5680,
+    "input_rows": 54999,
+    "backlog": 118885,
+    "k2c_p95": 123026
+   },
+   {
+    "batch_id": 5,
+    "offset_sec": -299.3,
+    "trigger_ms": 5460,
+    "input_rows": 54998,
+    "backlog": 63887,
+    "k2c_p95": 117726
+   },
+   {
+    "batch_id": 6,
+    "offset_sec": -293.8,
+    "trigger_ms": 5590,
+    "input_rows": 54999,
+    "backlog": 8888,
+    "k2c_p95": 111944
+   },
+   {
+    "batch_id": 7,
+    "offset_sec": -288.2,
+    "trigger_ms": 2225,
+    "input_rows": 8888,
+    "backlog": 0,
+    "k2c_p95": 106976
+   },
+   {
+    "batch_id": 8,
+    "offset_sec": 4.5,
+    "trigger_ms": 3351,
+    "input_rows": 22224,
+    "backlog": 0,
+    "k2c_p95": 4274
+   },
+   {
+    "batch_id": 9,
+    "offset_sec": 9.5,
+    "trigger_ms": 2716,
+    "input_rows": 24959,
+    "backlog": 0,
+    "k2c_p95": 4814
+   },
+   {
+    "batch_id": 10,
+    "offset_sec": 14.5,
+    "trigger_ms": 2562,
+    "input_rows": 25003,
+    "backlog": 0,
+    "k2c_p95": 4793
+   },
+   {
+    "batch_id": 11,
+    "offset_sec": 19.5,
+    "trigger_ms": 3296,
+    "input_rows": 25003,
+    "backlog": 0,
+    "k2c_p95": 4838
+   },
+   {
+    "batch_id": 12,
+    "offset_sec": 24.5,
+    "trigger_ms": 2522,
+    "input_rows": 24925,
+    "backlog": 0,
+    "k2c_p95": 4793
+   },
+   {
+    "batch_id": 13,
+    "offset_sec": 29.5,
+    "trigger_ms": 2682,
+    "input_rows": 24990,
+    "backlog": 0,
+    "k2c_p95": 4815
+   },
+   {
+    "batch_id": 14,
+    "offset_sec": 34.5,
+    "trigger_ms": 3164,
+    "input_rows": 25013,
+    "backlog": 0,
+    "k2c_p95": 4801
+   },
+   {
+    "batch_id": 15,
+    "offset_sec": 39.5,
+    "trigger_ms": 2544,
+    "input_rows": 24938,
+    "backlog": 0,
+    "k2c_p95": 4827
+   },
+   {
+    "batch_id": 16,
+    "offset_sec": 44.5,
+    "trigger_ms": 2436,
+    "input_rows": 24989,
+    "backlog": 0,
+    "k2c_p95": 4785
+   },
+   {
+    "batch_id": 17,
+    "offset_sec": 49.5,
+    "trigger_ms": 2779,
+    "input_rows": 24998,
+    "backlog": 0,
+    "k2c_p95": 4826
+   },
+   {
+    "batch_id": 18,
+    "offset_sec": 54.5,
+    "trigger_ms": 2924,
+    "input_rows": 24912,
+    "backlog": 0,
+    "k2c_p95": 4802
+   },
+   {
+    "batch_id": 19,
+    "offset_sec": 59.5,
+    "trigger_ms": 2755,
+    "input_rows": 24994,
+    "backlog": 0,
+    "k2c_p95": 4816
+   },
+   {
+    "batch_id": 20,
+    "offset_sec": 64.5,
+    "trigger_ms": 2405,
+    "input_rows": 24984,
+    "backlog": 0,
+    "k2c_p95": 4802
+   },
+   {
+    "batch_id": 21,
+    "offset_sec": 69.5,
+    "trigger_ms": 2713,
+    "input_rows": 24974,
+    "backlog": 0,
+    "k2c_p95": 4800
+   },
+   {
+    "batch_id": 22,
+    "offset_sec": 74.5,
+    "trigger_ms": 2488,
+    "input_rows": 24946,
+    "backlog": 0,
+    "k2c_p95": 4783
+   },
+   {
+    "batch_id": 23,
+    "offset_sec": 79.5,
+    "trigger_ms": 2612,
+    "input_rows": 25002,
+    "backlog": 0,
+    "k2c_p95": 4830
+   },
+   {
+    "batch_id": 24,
+    "offset_sec": 84.5,
+    "trigger_ms": 2420,
+    "input_rows": 24992,
+    "backlog": 0,
+    "k2c_p95": 4796
+   },
+   {
+    "batch_id": 25,
+    "offset_sec": 89.5,
+    "trigger_ms": 3223,
+    "input_rows": 24991,
+    "backlog": 0,
+    "k2c_p95": 4845
+   },
+   {
+    "batch_id": 26,
+    "offset_sec": 94.5,
+    "trigger_ms": 2475,
+    "input_rows": 24956,
+    "backlog": 0,
+    "k2c_p95": 4793
+   },
+   {
+    "batch_id": 27,
+    "offset_sec": 99.5,
+    "trigger_ms": 2679,
+    "input_rows": 24985,
+    "backlog": 0,
+    "k2c_p95": 4806
+   },
+   {
+    "batch_id": 28,
+    "offset_sec": 104.5,
+    "trigger_ms": 3072,
+    "input_rows": 24961,
+    "backlog": 0,
+    "k2c_p95": 4789
+   },
+   {
+    "batch_id": 29,
+    "offset_sec": 109.5,
+    "trigger_ms": 2717,
+    "input_rows": 24997,
+    "backlog": 0,
+    "k2c_p95": 4826
+   },
+   {
+    "batch_id": 30,
+    "offset_sec": 114.5,
+    "trigger_ms": 3855,
+    "input_rows": 25003,
+    "backlog": 0,
+    "k2c_p95": 4791
+   },
+   {
+    "batch_id": 31,
+    "offset_sec": 119.5,
+    "trigger_ms": 3226,
+    "input_rows": 25006,
+    "backlog": 0,
+    "k2c_p95": 4836
+   },
+   {
+    "batch_id": 32,
+    "offset_sec": 124.5,
+    "trigger_ms": 2891,
+    "input_rows": 24919,
+    "backlog": 0,
+    "k2c_p95": 4792
+   },
+   {
+    "batch_id": 33,
+    "offset_sec": 129.5,
+    "trigger_ms": 2620,
+    "input_rows": 24991,
+    "backlog": 0,
+    "k2c_p95": 4818
+   },
+   {
+    "batch_id": 34,
+    "offset_sec": 134.5,
+    "trigger_ms": 2454,
+    "input_rows": 25016,
+    "backlog": 0,
+    "k2c_p95": 4783
+   },
+   {
+    "batch_id": 35,
+    "offset_sec": 139.5,
+    "trigger_ms": 2464,
+    "input_rows": 25060,
+    "backlog": 0,
+    "k2c_p95": 4810
+   },
+   {
+    "batch_id": 36,
+    "offset_sec": 144.5,
+    "trigger_ms": 2301,
+    "input_rows": 24811,
+    "backlog": 0,
+    "k2c_p95": 4772
+   },
+   {
+    "batch_id": 37,
+    "offset_sec": 149.5,
+    "trigger_ms": 2605,
+    "input_rows": 25011,
+    "backlog": 0,
+    "k2c_p95": 4833
+   },
+   {
+    "batch_id": 38,
+    "offset_sec": 154.5,
+    "trigger_ms": 2319,
+    "input_rows": 25013,
+    "backlog": 0,
+    "k2c_p95": 4789
+   },
+   {
+    "batch_id": 39,
+    "offset_sec": 159.5,
+    "trigger_ms": 2786,
+    "input_rows": 24986,
+    "backlog": 0,
+    "k2c_p95": 4896
+   },
+   {
+    "batch_id": 40,
+    "offset_sec": 164.5,
+    "trigger_ms": 2349,
+    "input_rows": 24917,
+    "backlog": 0,
+    "k2c_p95": 4774
+   },
+   {
+    "batch_id": 41,
+    "offset_sec": 169.5,
+    "trigger_ms": 2517,
+    "input_rows": 24973,
+    "backlog": 0,
+    "k2c_p95": 4853
+   },
+   {
+    "batch_id": 42,
+    "offset_sec": 174.5,
+    "trigger_ms": 2464,
+    "input_rows": 25020,
+    "backlog": 0,
+    "k2c_p95": 4810
+   },
+   {
+    "batch_id": 43,
+    "offset_sec": 179.5,
+    "trigger_ms": 2549,
+    "input_rows": 24968,
+    "backlog": 0,
+    "k2c_p95": 4818
+   },
+   {
+    "batch_id": 44,
+    "offset_sec": 184.5,
+    "trigger_ms": 2584,
+    "input_rows": 24878,
+    "backlog": 0,
+    "k2c_p95": 4786
+   },
+   {
+    "batch_id": 45,
+    "offset_sec": 189.5,
+    "trigger_ms": 2548,
+    "input_rows": 24922,
+    "backlog": 0,
+    "k2c_p95": 4827
+   },
+   {
+    "batch_id": 46,
+    "offset_sec": 194.5,
+    "trigger_ms": 2650,
+    "input_rows": 24950,
+    "backlog": 0,
+    "k2c_p95": 4784
+   },
+   {
+    "batch_id": 47,
+    "offset_sec": 199.5,
+    "trigger_ms": 2544,
+    "input_rows": 25017,
+    "backlog": 0,
+    "k2c_p95": 4846
+   },
+   {
+    "batch_id": 48,
+    "offset_sec": 204.5,
+    "trigger_ms": 2386,
+    "input_rows": 24966,
+    "backlog": 0,
+    "k2c_p95": 4782
+   },
+   {
+    "batch_id": 49,
+    "offset_sec": 209.5,
+    "trigger_ms": 3718,
+    "input_rows": 25017,
+    "backlog": 0,
+    "k2c_p95": 4835
+   },
+   {
+    "batch_id": 50,
+    "offset_sec": 214.5,
+    "trigger_ms": 3545,
+    "input_rows": 23743,
+    "backlog": 0,
+    "k2c_p95": 4854
+   },
+   {
+    "batch_id": 51,
+    "offset_sec": 219.5,
+    "trigger_ms": 2931,
+    "input_rows": 24647,
+    "backlog": 0,
+    "k2c_p95": 4815
+   },
+   {
+    "batch_id": 52,
+    "offset_sec": 224.5,
+    "trigger_ms": 2616,
+    "input_rows": 24974,
+    "backlog": 0,
+    "k2c_p95": 4778
+   },
+   {
+    "batch_id": 53,
+    "offset_sec": 229.5,
+    "trigger_ms": 4179,
+    "input_rows": 24983,
+    "backlog": 0,
+    "k2c_p95": 4870
+   },
+   {
+    "batch_id": 54,
+    "offset_sec": 234.5,
+    "trigger_ms": 2364,
+    "input_rows": 24600,
+    "backlog": 0,
+    "k2c_p95": 4794
+   },
+   {
+    "batch_id": 55,
+    "offset_sec": 239.5,
+    "trigger_ms": 2716,
+    "input_rows": 24986,
+    "backlog": 0,
+    "k2c_p95": 4833
+   },
+   {
+    "batch_id": 56,
+    "offset_sec": 244.5,
+    "trigger_ms": 2286,
+    "input_rows": 25000,
+    "backlog": 0,
+    "k2c_p95": 4788
+   },
+   {
+    "batch_id": 57,
+    "offset_sec": 249.5,
+    "trigger_ms": 2685,
+    "input_rows": 25022,
+    "backlog": 0,
+    "k2c_p95": 4875
+   },
+   {
+    "batch_id": 58,
+    "offset_sec": 254.5,
+    "trigger_ms": 5354,
+    "input_rows": 24960,
+    "backlog": 0,
+    "k2c_p95": 4800
+   },
+   {
+    "batch_id": 59,
+    "offset_sec": 259.8,
+    "trigger_ms": 3532,
+    "input_rows": 26751,
+    "backlog": 0,
+    "k2c_p95": 5134
+   },
+   {
+    "batch_id": 60,
+    "offset_sec": 264.5,
+    "trigger_ms": 3427,
+    "input_rows": 23075,
+    "backlog": 0,
+    "k2c_p95": 4469
+   },
+   {
+    "batch_id": 61,
+    "offset_sec": 269.5,
+    "trigger_ms": 2569,
+    "input_rows": 24947,
+    "backlog": 0,
+    "k2c_p95": 4802
+   },
+   {
+    "batch_id": 62,
+    "offset_sec": 274.5,
+    "trigger_ms": 2586,
+    "input_rows": 24980,
+    "backlog": 0,
+    "k2c_p95": 4782
+   },
+   {
+    "batch_id": 63,
+    "offset_sec": 279.5,
+    "trigger_ms": 2384,
+    "input_rows": 24986,
+    "backlog": 0,
+    "k2c_p95": 4818
+   },
+   {
+    "batch_id": 64,
+    "offset_sec": 284.5,
+    "trigger_ms": 2562,
+    "input_rows": 25003,
+    "backlog": 0,
+    "k2c_p95": 4798
+   },
+   {
+    "batch_id": 65,
+    "offset_sec": 289.5,
+    "trigger_ms": 2385,
+    "input_rows": 24967,
+    "backlog": 0,
+    "k2c_p95": 4800
+   },
+   {
+    "batch_id": 66,
+    "offset_sec": 294.5,
+    "trigger_ms": 2232,
+    "input_rows": 24997,
+    "backlog": 0,
+    "k2c_p95": 4778
+   },
+   {
+    "batch_id": 67,
+    "offset_sec": 299.5,
+    "trigger_ms": 2537,
+    "input_rows": 24984,
+    "backlog": 0,
+    "k2c_p95": 4794
+   },
+   {
+    "batch_id": 68,
+    "offset_sec": 304.5,
+    "trigger_ms": 2919,
+    "input_rows": 36130,
+    "backlog": 0,
+    "k2c_p95": 4678
+   },
+   {
+    "batch_id": 69,
+    "offset_sec": 309.5,
+    "trigger_ms": 3259,
+    "input_rows": 37502,
+    "backlog": 0,
+    "k2c_p95": 4796
+   },
+   {
+    "batch_id": 70,
+    "offset_sec": 314.5,
+    "trigger_ms": 3057,
+    "input_rows": 37455,
+    "backlog": 0,
+    "k2c_p95": 4785
+   },
+   {
+    "batch_id": 71,
+    "offset_sec": 319.5,
+    "trigger_ms": 3749,
+    "input_rows": 37519,
+    "backlog": 0,
+    "k2c_p95": 4839
+   },
+   {
+    "batch_id": 72,
+    "offset_sec": 324.5,
+    "trigger_ms": 3028,
+    "input_rows": 37438,
+    "backlog": 0,
+    "k2c_p95": 4780
+   },
+   {
+    "batch_id": 73,
+    "offset_sec": 329.5,
+    "trigger_ms": 3215,
+    "input_rows": 37502,
+    "backlog": 0,
+    "k2c_p95": 4805
+   },
+   {
+    "batch_id": 74,
+    "offset_sec": 334.5,
+    "trigger_ms": 3319,
+    "input_rows": 37476,
+    "backlog": 0,
+    "k2c_p95": 4781
+   },
+   {
+    "batch_id": 75,
+    "offset_sec": 339.5,
+    "trigger_ms": 3127,
+    "input_rows": 37487,
+    "backlog": 0,
+    "k2c_p95": 4794
+   },
+   {
+    "batch_id": 76,
+    "offset_sec": 344.5,
+    "trigger_ms": 2963,
+    "input_rows": 37504,
+    "backlog": 0,
+    "k2c_p95": 4793
+   },
+   {
+    "batch_id": 77,
+    "offset_sec": 349.5,
+    "trigger_ms": 3239,
+    "input_rows": 37484,
+    "backlog": 0,
+    "k2c_p95": 4795
+   },
+   {
+    "batch_id": 78,
+    "offset_sec": 354.5,
+    "trigger_ms": 3163,
+    "input_rows": 37481,
+    "backlog": 0,
+    "k2c_p95": 4797
+   },
+   {
+    "batch_id": 79,
+    "offset_sec": 359.5,
+    "trigger_ms": 3353,
+    "input_rows": 37470,
+    "backlog": 0,
+    "k2c_p95": 4795
+   },
+   {
+    "batch_id": 80,
+    "offset_sec": 364.5,
+    "trigger_ms": 3287,
+    "input_rows": 37318,
+    "backlog": 0,
+    "k2c_p95": 4786
+   },
+   {
+    "batch_id": 81,
+    "offset_sec": 369.5,
+    "trigger_ms": 3715,
+    "input_rows": 37494,
+    "backlog": 0,
+    "k2c_p95": 4798
+   },
+   {
+    "batch_id": 82,
+    "offset_sec": 374.5,
+    "trigger_ms": 3037,
+    "input_rows": 37352,
+    "backlog": 0,
+    "k2c_p95": 4779
+   },
+   {
+    "batch_id": 83,
+    "offset_sec": 379.5,
+    "trigger_ms": 3528,
+    "input_rows": 37497,
+    "backlog": 0,
+    "k2c_p95": 4797
+   },
+   {
+    "batch_id": 84,
+    "offset_sec": 384.5,
+    "trigger_ms": 3189,
+    "input_rows": 37531,
+    "backlog": 0,
+    "k2c_p95": 4783
+   },
+   {
+    "batch_id": 85,
+    "offset_sec": 389.5,
+    "trigger_ms": 3891,
+    "input_rows": 37347,
+    "backlog": 0,
+    "k2c_p95": 4823
+   },
+   {
+    "batch_id": 86,
+    "offset_sec": 394.5,
+    "trigger_ms": 3270,
+    "input_rows": 37434,
+    "backlog": 0,
+    "k2c_p95": 4788
+   },
+   {
+    "batch_id": 87,
+    "offset_sec": 399.5,
+    "trigger_ms": 3309,
+    "input_rows": 37413,
+    "backlog": 0,
+    "k2c_p95": 4792
+   },
+   {
+    "batch_id": 88,
+    "offset_sec": 404.5,
+    "trigger_ms": 3588,
+    "input_rows": 37457,
+    "backlog": 0,
+    "k2c_p95": 4785
+   },
+   {
+    "batch_id": 89,
+    "offset_sec": 409.5,
+    "trigger_ms": 3150,
+    "input_rows": 37504,
+    "backlog": 0,
+    "k2c_p95": 4795
+   },
+   {
+    "batch_id": 90,
+    "offset_sec": 414.5,
+    "trigger_ms": 3118,
+    "input_rows": 37443,
+    "backlog": 0,
+    "k2c_p95": 4781
+   },
+   {
+    "batch_id": 91,
+    "offset_sec": 419.5,
+    "trigger_ms": 3143,
+    "input_rows": 37450,
+    "backlog": 0,
+    "k2c_p95": 4791
+   },
+   {
+    "batch_id": 92,
+    "offset_sec": 424.5,
+    "trigger_ms": 3593,
+    "input_rows": 37366,
+    "backlog": 0,
+    "k2c_p95": 4790
+   },
+   {
+    "batch_id": 93,
+    "offset_sec": 429.5,
+    "trigger_ms": 3191,
+    "input_rows": 37399,
+    "backlog": 0,
+    "k2c_p95": 4787
+   },
+   {
+    "batch_id": 94,
+    "offset_sec": 434.5,
+    "trigger_ms": 2950,
+    "input_rows": 37519,
+    "backlog": 0,
+    "k2c_p95": 4783
+   },
+   {
+    "batch_id": 95,
+    "offset_sec": 439.5,
+    "trigger_ms": 3818,
+    "input_rows": 37606,
+    "backlog": 0,
+    "k2c_p95": 4802
+   },
+   {
+    "batch_id": 96,
+    "offset_sec": 444.5,
+    "trigger_ms": 2991,
+    "input_rows": 37341,
+    "backlog": 0,
+    "k2c_p95": 4768
+   },
+   {
+    "batch_id": 97,
+    "offset_sec": 449.5,
+    "trigger_ms": 3229,
+    "input_rows": 37507,
+    "backlog": 0,
+    "k2c_p95": 4789
+   },
+   {
+    "batch_id": 98,
+    "offset_sec": 454.5,
+    "trigger_ms": 3106,
+    "input_rows": 37487,
+    "backlog": 0,
+    "k2c_p95": 4784
+   },
+   {
+    "batch_id": 99,
+    "offset_sec": 459.5,
+    "trigger_ms": 3001,
+    "input_rows": 37470,
+    "backlog": 0,
+    "k2c_p95": 4789
+   },
+   {
+    "batch_id": 100,
+    "offset_sec": 464.5,
+    "trigger_ms": 3135,
+    "input_rows": 37512,
+    "backlog": 0,
+    "k2c_p95": 4784
+   },
+   {
+    "batch_id": 101,
+    "offset_sec": 469.5,
+    "trigger_ms": 3878,
+    "input_rows": 37497,
+    "backlog": 0,
+    "k2c_p95": 4781
+   },
+   {
+    "batch_id": 102,
+    "offset_sec": 474.5,
+    "trigger_ms": 3645,
+    "input_rows": 37350,
+    "backlog": 0,
+    "k2c_p95": 4784
+   },
+   {
+    "batch_id": 103,
+    "offset_sec": 479.5,
+    "trigger_ms": 4115,
+    "input_rows": 37363,
+    "backlog": 0,
+    "k2c_p95": 4792
+   },
+   {
+    "batch_id": 104,
+    "offset_sec": 484.5,
+    "trigger_ms": 3280,
+    "input_rows": 37269,
+    "backlog": 0,
+    "k2c_p95": 4777
+   },
+   {
+    "batch_id": 105,
+    "offset_sec": 489.5,
+    "trigger_ms": 3310,
+    "input_rows": 37535,
+    "backlog": 0,
+    "k2c_p95": 4786
+   },
+   {
+    "batch_id": 106,
+    "offset_sec": 494.5,
+    "trigger_ms": 3059,
+    "input_rows": 37349,
+    "backlog": 0,
+    "k2c_p95": 4780
+   },
+   {
+    "batch_id": 107,
+    "offset_sec": 499.5,
+    "trigger_ms": 3323,
+    "input_rows": 37491,
+    "backlog": 0,
+    "k2c_p95": 4788
+   },
+   {
+    "batch_id": 108,
+    "offset_sec": 504.5,
+    "trigger_ms": 3691,
+    "input_rows": 37530,
+    "backlog": 0,
+    "k2c_p95": 4814
+   },
+   {
+    "batch_id": 109,
+    "offset_sec": 509.5,
+    "trigger_ms": 3734,
+    "input_rows": 37471,
+    "backlog": 0,
+    "k2c_p95": 4786
+   },
+   {
+    "batch_id": 110,
+    "offset_sec": 514.5,
+    "trigger_ms": 3356,
+    "input_rows": 37376,
+    "backlog": 0,
+    "k2c_p95": 4779
+   },
+   {
+    "batch_id": 111,
+    "offset_sec": 519.5,
+    "trigger_ms": 3272,
+    "input_rows": 37482,
+    "backlog": 0,
+    "k2c_p95": 4790
+   },
+   {
+    "batch_id": 112,
+    "offset_sec": 524.5,
+    "trigger_ms": 2921,
+    "input_rows": 37475,
+    "backlog": 0,
+    "k2c_p95": 4795
+   },
+   {
+    "batch_id": 113,
+    "offset_sec": 529.5,
+    "trigger_ms": 3381,
+    "input_rows": 37515,
+    "backlog": 0,
+    "k2c_p95": 4786
+   },
+   {
+    "batch_id": 114,
+    "offset_sec": 534.5,
+    "trigger_ms": 3242,
+    "input_rows": 37127,
+    "backlog": 0,
+    "k2c_p95": 4787
+   },
+   {
+    "batch_id": 115,
+    "offset_sec": 539.5,
+    "trigger_ms": 3300,
+    "input_rows": 37525,
+    "backlog": 0,
+    "k2c_p95": 4797
+   },
+   {
+    "batch_id": 116,
+    "offset_sec": 544.5,
+    "trigger_ms": 3594,
+    "input_rows": 37456,
+    "backlog": 0,
+    "k2c_p95": 4785
+   },
+   {
+    "batch_id": 117,
+    "offset_sec": 549.5,
+    "trigger_ms": 3310,
+    "input_rows": 37420,
+    "backlog": 0,
+    "k2c_p95": 4793
+   },
+   {
+    "batch_id": 118,
+    "offset_sec": 554.5,
+    "trigger_ms": 3046,
+    "input_rows": 37462,
+    "backlog": 0,
+    "k2c_p95": 4786
+   },
+   {
+    "batch_id": 119,
+    "offset_sec": 559.5,
+    "trigger_ms": 3513,
+    "input_rows": 37512,
+    "backlog": 0,
+    "k2c_p95": 4794
+   },
+   {
+    "batch_id": 120,
+    "offset_sec": 564.5,
+    "trigger_ms": 2908,
+    "input_rows": 37406,
+    "backlog": 0,
+    "k2c_p95": 4788
+   },
+   {
+    "batch_id": 121,
+    "offset_sec": 569.5,
+    "trigger_ms": 3392,
+    "input_rows": 37509,
+    "backlog": 0,
+    "k2c_p95": 4782
+   },
+   {
+    "batch_id": 122,
+    "offset_sec": 574.5,
+    "trigger_ms": 3042,
+    "input_rows": 37190,
+    "backlog": 0,
+    "k2c_p95": 4782
+   },
+   {
+    "batch_id": 123,
+    "offset_sec": 579.5,
+    "trigger_ms": 3715,
+    "input_rows": 37466,
+    "backlog": 0,
+    "k2c_p95": 4796
+   },
+   {
+    "batch_id": 124,
+    "offset_sec": 584.5,
+    "trigger_ms": 2963,
+    "input_rows": 37335,
+    "backlog": 0,
+    "k2c_p95": 4792
+   },
+   {
+    "batch_id": 125,
+    "offset_sec": 589.5,
+    "trigger_ms": 3573,
+    "input_rows": 37527,
+    "backlog": 0,
+    "k2c_p95": 4792
+   },
+   {
+    "batch_id": 126,
+    "offset_sec": 594.5,
+    "trigger_ms": 2951,
+    "input_rows": 37170,
+    "backlog": 0,
+    "k2c_p95": 4790
+   },
+   {
+    "batch_id": 127,
+    "offset_sec": 599.5,
+    "trigger_ms": 3015,
+    "input_rows": 37512,
+    "backlog": 0,
+    "k2c_p95": 4791
+   },
+   {
+    "batch_id": 128,
+    "offset_sec": 604.5,
+    "trigger_ms": 1556,
+    "input_rows": 3901,
+    "backlog": 0,
+    "k2c_p95": 5009
+   }
+  ],
+  "resources": {
+   "cgroup_delta": {
+    "window_utc": [
+     "2026-11-20T05:55:40.121",
+     "2026-11-20T06:06:10.565"
+    ],
+    "log-etlm-2-spark-1": {
+     "cpu_sec": 1033.7,
+     "throttled_ratio": 0.07,
+     "throttled_sec": 15.6,
+     "memory_peak_after": 3221360640,
+     "oom_kill_delta": 0
+    },
+    "log-etlm-2-clickhouse-1": {
+     "cpu_sec": 251.4,
+     "throttled_ratio": 0.067,
+     "throttled_sec": 49.2,
+     "memory_peak_after": 2582622208,
+     "oom_kill_delta": 0
+    },
+    "log-etlm-2-kafka-1": {
+     "cpu_sec": 189.2,
+     "throttled_ratio": 0.041,
+     "throttled_sec": 5.4,
+     "memory_peak_after": 2147622912,
+     "oom_kill_delta": 0
+    }
+   },
+   "generator_cpu_cores": {
+    "1202033/base": {
+     "avg": 0.36,
+     "max": 0.91
+    },
+    "1202033/peak": {
+     "avg": 0.49,
+     "max": 0.75
+    }
+   },
+   "container_cpu_cores_5s": {
+    "spark/base": {
+     "avg": 1.53,
+     "max": 3.61
+    },
+    "clickhouse/base": {
+     "avg": 0.41,
+     "max": 1.85
+    },
+    "kafka/base": {
+     "avg": 0.31,
+     "max": 1.98
+    },
+    "spark/peak": {
+     "avg": 1.76,
+     "max": 3.7
+    },
+    "clickhouse/peak": {
+     "avg": 0.38,
+     "max": 1.83
+    },
+    "kafka/peak": {
+     "avg": 0.3,
+     "max": 1.94
+    }
+   }
+  }
+ },
+ "nmt_committed_mb": [
+  "category                     max last 05:55:40 05:57:41 05:59:43 06:01:44 06:03:45 06:05:47",
+  "Total                        2013 1561 1431 1543 1393 1730 2013 1561",
+  "Java Heap                    1445 1000 977 1009 845 1164 1445 1000",
+  "Metaspace                    178 178 165 172 174 176 177 178",
+  "Code                         127 127 71 96 108 115 122 127",
+  "GC                           104 88 83 86 81 93 104 88",
+  "Symbol                       42 42 42 42 42 42 42 42",
+  "Thread                       37 30 8 37 37 35 31 30",
+  "Class                        30 30 29 29 30 30 30 30",
+  "Other                        29 29 14 29 29 29 29 29",
+  "Arena Chunk                  24 3 10 2 16 14 0 3",
+  "Compiler                     22 1 1 9 1 1 1 1",
+  "Native Memory Tracking       18 18 16 17 17 17 18 18",
+  "Shared class space           12 12 12 12 12 12 12 12",
+  "Internal                     2 2 2 2 2 2 2 2",
+  "Module                       1 1 1 1 1 1 1 1"
+ ],
+ "idle_snapshot": {
+  "note": "부하 종료 직후 1회 수동 측정(원본 smaps 미보존)",
+  "java_rss_anon_mb": 2021,
+  "nmt_committed_total_mb": 1544,
+  "untracked_mb": 477,
+  "nmt_malloc_mb": 126,
+  "anon_64mb_aligned_regions": 66,
+  "anon_64mb_aligned_regions_rss_mb": 681,
+  "java_heap_region_rss_mb": 947,
+  "nproc": 8
+ }
+}
