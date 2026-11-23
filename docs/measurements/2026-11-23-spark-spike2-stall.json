@@ -1,0 +1,41 @@
+{
+  "subject": "spike2 실행 05:58:23~05:58:40 UTC(14:58 KST) Producer ACK·Spark batch 68 지연 원인 조사",
+  "spark_run_id": "3896a384-961c-4847-9c6b-940201e6e21b",
+  "generator_run_ids": ["2a3603ae7c6146f68c7f9847eba4bfa0", "fd89261af31b456db74e07c5adee6bc2"],
+  "producer_ack_stalls_utc": [
+    {"window": "05:58:23~05:58:25", "ack_p99_ms_max": 1344.9, "undelivered_max": 2824, "both_generators": true},
+    {"window": "05:58:32~05:58:40", "ack_p99_ms_max": 2961.8, "undelivered_max": 9629, "both_generators": true}
+  ],
+  "ack_p99_over_300ms_seconds_in_run": "12개 모두 05:58:24~05:58:40 안에 있다(750초 실행 전체)",
+  "clickhouse_order_events_merges_over_1s_in_run": [
+    {"start_utc": "05:58:23.731", "end_utc": "05:58:25.590", "duration_ms": 1859, "rows": 85665, "bytes": 5579397, "part": "1795410000_18826_18830_2"},
+    {"start_utc": "05:58:28.273", "end_utc": "05:58:37.644", "duration_ms": 9370, "rows": 1549484, "bytes": 100278016, "part": "1795410000_18633_18830_5"},
+    {"end_utc": "06:04:13.087", "duration_ms": 1093, "rows": 119033, "bytes": 7737035, "note": "ACK 지연 동반 없음"}
+  ],
+  "spark_batch_68": {
+    "callback_started_at_utc": "05:58:30.064", "trigger_ms": 8826, "classification_ms": 3647, "orders_write_ms": 4863, "dlq_write_ms": 212,
+    "neighbors_66_67": {"classification_ms": [2471, 1672], "orders_write_ms": [1208, 1106]},
+    "clickhouse_insert_server_ms": [382, 375, 363],
+    "spark_container_cpu_05_58_35_to_37": "0.5~2%(docker stats)"
+  },
+  "system_psi_from_clickhouse_asynchronous_metric_log_us_per_interval": {
+    "PSI_MEM_full_05_58_29_to_37": [81147, 129142, 54310, 162421, 98260, 158793, 371224, 291999, 183701],
+    "PSI_MEM_full_05_58_15_to_28_max": 34107,
+    "PSI_IO_some_05_58_33_to_37": [55005, 167462, 346843, 375887, 181720],
+    "PSI_IO_some_05_58_24": 138592,
+    "PSI_CPU_full": 0,
+    "OSProcessesBlocked_05_58_33_to_37": [1, 4, 2, 4, 3],
+    "OSStealTime": 0
+  },
+  "kafka_cgroup_after_run": {
+    "memory.max": 2147483648, "memory.peak": 2147590144, "memory.events.max": 8391,
+    "pgscan_direct": 393934, "pgsteal_direct": 382953, "workingset_refault_file": 883528,
+    "heap": "-Xms512m -Xmx512m", "note": "memory.events는 컨테이너 기동 후 누적(약 4시간)이라 이 시각에 한정되지 않는다"
+  },
+  "other_cgroups_memory.events.max": {"spark": 0, "clickhouse": 0},
+  "excluded": {
+    "kafka_gc": "GC(96) 05:58:15.5 28ms, GC(97) 05:58:49.9 26ms. 구간 안 GC 없음",
+    "kafka_broker_log": "05:58:04~05:59:30 이벤트 없음(segment roll 05:57:53, 보존 삭제 05:50:16)",
+    "vm_freeze": "ops.host_stalls 없음. gen_cpu 1초 표본 최대 간격 1.5초이고 생성기 CPU는 계속 증가했다"
+  }
+}

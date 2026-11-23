@@ -125,7 +125,7 @@
 - 키는 다른 `PRODUCER_*` 키처럼 반드시 명시한다. 빈 값을 허용하는 키로 추가한다.
 - 프로파일을 지정하면 `PRODUCER_EPS`는 쓰지 않는다. 키 자체와 값 검증은 기존대로 유지한다.
 - `PRODUCER_MAX_EVENTS`는 프로파일과 함께 적용한다. 프로파일 종료나 최대 건수 도달 중 먼저 오는 쪽에서 종료한다. 프로파일 측정은 `0`(무제한)으로 실행한다.
-- 프로파일 파일 위치: `apps/log_generator/profiles/steady.csv`, `step.csv`, `spike.csv`, `daily.csv`. 2개 프로세스 실행용 파일은 확장 단계에서 정한다.
+- 프로파일 파일 위치: `apps/log_generator/profiles/steady.csv`, `step.csv`, `spike.csv`, `daily.csv`. 2개 프로세스 실행용 파일은 `spike-half.csv`다(2026-11-23). `spike.csv`와 구간·길이·label이 같고 EPS만 절반(2,500/6,000/2,500)이다. 두 프로세스가 각각 이 파일로 동시에 실행하며, 판정은 `spike.csv` 구간 경계와 두 `run_id` 합계로 한다.
 
 ### 프로파일 파일 형식
 
@@ -159,7 +159,7 @@ duration_sec,eps,label
 
 ## 측정 방법
 
-- 자원·설정은 `.env`·Compose 기본값 그대로다. Kafka UI는 끈다. 측정 중 코드·설정을 바꾸지 않는다.
+- 자원·설정은 `.env`·Compose 기본값 그대로다. Kafka UI는 끈다. Grafana 대시보드는 측정 중 열어 두지 않는다. 자동 새로고침 쿼리가 ClickHouse CPU를 쓰기 때문이다(2026-11-23 spike3 실행에서 `grafana_reader` 쿼리 CPU 188초, ClickHouse CPU 상한 걸린 주기 16.2%). 측정 중 코드·설정을 바꾸지 않는다.
 - Spark는 측정마다 별도 체크포인트·`latest`로 시작한다. 생성기는 Spark 첫 배치 진행 로그 확인 후 시작한다.
 - 각 프로파일 실행의 생성기 `run_id`와 Spark `run_id`를 기록한다.
 - 구간 지표는 `ops.producer_stats`·`ops.spark_query_progress`·`silver.order_events`에서 구간 시각으로 잘라 집계한다. 측정 스크립트·결과 JSON은 `docs/measurements/`에 둔다.

@@ -1,6 +1,6 @@
 # Spark 스트림 처리
 
-- 상태: 완료 (5,000 EPS 지속 부하 충족(로컬 Parquet 1차, ClickHouse 경로는 4단계에서 재측정·통과), 출력 장애·재시작·offset 소실·DLQ 조회 검증 완료, 지연 주입 부분 통과 후 판정 정리, 계측 오버헤드 1회 측정. [3단계 마무리 검증 계획](#3단계-마무리-검증-계획-2026-11-17) 종료). 6단계 [Spark 튜닝](#spark-튜닝-6단계-2026-11-20) 진행 중
+- 상태: 완료 (5,000 EPS 지속 부하 충족(로컬 Parquet 1차, ClickHouse 경로는 4단계에서 재측정·통과), 출력 장애·재시작·offset 소실·DLQ 조회 검증 완료, 지연 주입 부분 통과 후 판정 정리, 계측 오버헤드 1회 측정. [3단계 마무리 검증 계획](#3단계-마무리-검증-계획-2026-11-17) 종료). 6단계 [Spark 튜닝](#spark-튜닝-6단계-2026-11-20) 진행 중(튜닝 목표 평시·지속 용량·스파이크 모두 충족, [스파이크 판정](#스파이크-판정-생성기-2개-2026-11-23) 2026-11-23)
 - 적용 범위: 제품 v1
 
 ## 목표
@@ -1255,6 +1255,185 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 - 메모리 해석: `memory.peak`에는 회수 가능한 page cache(약 170MB)가 들어 있다. OOM과 직접 관계있는 `anon` 최대는 step 부하 중 55,000(D1 step)에서 2,530MB, 65,000(B1 step)에서 2,694MB로 약 160MB 늘었다. 3GiB(3,072MiB)까지 `anon` 여유는 약 378MB(12%)다. JVM 힙은 `--driver-memory 1536m`으로 상한이 고정되어 있다.
 - 판정: B1을 채택한다(2026-11-23). 채택 기준 1~4를 모두 충족했고, 11,000·12,000 EPS 참고 단계도 누적 없이 처리했다. 상한은 backlog가 있을 때만 작동하므로 평시 지연은 바뀌지 않는다(평시 피크 p99 3,246 → 3,268ms). 반면 catch-up·스파이크 회복 속도는 수용 상한이 11,000에서 13,000 EPS로 오르면서 빨라진다. `.env.example`의 `SPARK_MAX_OFFSETS_PER_TRIGGER`를 65000으로 바꿨다.
 - 남은 위험: 근거는 실행 1회이고, 메모리는 실행마다 수십~100MB씩 달라질 수 있다. 생성기 2개로 스파이크를 판정할 때 `anon` 최대와 OOM kill을 다시 확인한다. 여유가 부족하면 `mem_limit` 상향(P2)을 검토한다.
+
+### 스파이크 판정: 생성기 2개 (2026-11-23)
+
+[튜닝 목표](06-load-profile.md#튜닝-목표) 중 남은 스파이크 기준을 판정했다. 평시는 [D1 steady](#d1-적용-steady-검증-2026-11-23), 지속 용량은 [D1 step](#d1-적용-step-검증-2026-11-23)과 [B1](#b1-배치-상한-65000-실험-2026-11-23)에서 충족했다.
+
+- 조건: 커밋 `018060b`, `.env` 기본값(`SPARK_MAX_OFFSETS_PER_TRIGGER=65000`, `SPARK_DRIVER_MEMORY=1536m`, Spark `cpus` 4, `mem_limit` 3g). Spark는 `spark` 서비스를 새 체크포인트 `/opt/spark/checkpoints/spike2-20261123`·`latest`로 다시 만들고, 첫 배치 진행 기록을 확인한 뒤 생성기를 시작했다. 생성기 2개 프로세스가 각각 `spike-half.csv`(2,500/6,000/2,500 EPS)로 동시에 실행했다. 판정은 `spike.csv` 구간 경계로 했다([PRD 06 설정](06-load-profile.md#설정)). Grafana는 켜 두었고 Kafka UI는 껐다.
+- 실행: 14:52:52~15:05:22 KST(생성기 기준 750초). 생성기 run_id `2a3603ae7c6146f68c7f9847eba4bfa0`·`fd89261af31b456db74e07c5adee6bc2`, Spark run_id `3896a384-961c-4847-9c6b-940201e6e21b`.
+- 원자료: [2026-11-23-spark-spike2.json](../measurements/2026-11-23-spark-spike2.json)(`analyze_profile.py` 출력, 자원 기록 포함). Grafana 캡처(14:52:22~15:06:22 KST): [파이프라인 운영](../../images/2026-11-23-spark-spike2/pipeline.png), [주문 현황](../../images/2026-11-23-spark-spike2/orders.png).
+
+**판정: 스파이크 기준 1~3과 공통 기준 통과.** 12,000 EPS 스파이크를 거의 실시간으로 처리했고, backlog는 한 번만 생겨 두 배치 안에 해소됐다. 이로써 튜닝 목표 세 가지(평시·지속 용량·스파이크)를 모두 충족했다.
+
+| 기준 | 결과 | 판정 |
+| --- | --- | --- |
+| 1. 생성 | spike 구간 생성 11,890 EPS(−0.9%), ACK 11,821 EPS. 두 run_id 합계 | 통과 |
+| 2. 누적 | spike 배치 29개, 트리거 평균 4,129ms, p99·최대 8,826ms, 5초 초과 3개. 실처리량 14,164 EPS. backlog 최대 17,555건(경과 345.9초, batch 69) → 다음 배치 4,262건 → 그다음 0. spike 마지막 60초 backlog 0. spike 중 종단 간 지연 p99 12.17초, 최대 13.96초 | 기록 |
+| 3. 회복 | spike 종료(경과 450초) 뒤 첫 배치(452.1초)가 backlog 0이고 Kafka → 콜백 p95 4,845ms ≤ warmup 평균 4,791ms × 1.5. 회복 시간 2.1초(기준 60초) | 통과 |
+| 공통 1. 건수 | 생성 = ACK 4,751,556. 정상 주문 생성 4,040,208(2,021,601 + 2,018,607) = `silver.order_events` 행 수 = `event_id` 고유 수 | 통과 |
+| 공통 2. 오류 | Spark 시도 152개 모두 `succeeded`, run_id 1개(재시작 0회). 생성기 전송 실패·출력 오류 0 | 통과 |
+| 공통 3. 자원 | 아래 표 | 기록 |
+
+구간별 요약:
+
+| 구간 | 생성 EPS | 트리거 평균 / p99 | 실처리량 | backlog 최대 | 종단 간 p99 / 최대 | ACK p95 100ms 이내 |
+| --- | ---: | --- | ---: | ---: | --- | ---: |
+| warmup(120초 이후) | 4,996 | 1,955 / 2,869ms | 12,780 | 0 | 6.73 / 7.30초 | 100% |
+| spike | 11,890 | 4,129 / 8,826ms | 14,164 | 17,555 | 12.17 / 13.96초 | 97.0% |
+| recovery | 4,989 | 1,994 / 4,738ms | 12,515 | 0 | 6.70 / 8.18초 | 100% |
+
+자원(측정 창 14:52:52~15:05:52 KST):
+
+| 컨테이너 | CPU 상한 걸린 주기 | 걸린 시간 | `memory.peak`(종료 시) | OOM kill |
+| --- | ---: | ---: | ---: | ---: |
+| spark | 12.8% | 34.9초 | 2,768,064,512B | 0 |
+| clickhouse | 4.8% | 34.5초 | 2,573,426,688B | 0 |
+| kafka | 4.3% | 11.8초 | 2,147,590,144B | 0 |
+| grafana | 0.5% | 4.0초 | 1,009,192,960B | 0 |
+
+- Spark `anon` 최대 2,403MiB(14:58:20 KST), `file` 최대 179MiB. 5초 간격 표본 153개다. 3GiB(3,072MiB)까지 `anon` 여유는 약 669MiB로, [B1 step](#b1-배치-상한-65000-실험-2026-11-23)의 2,694MB보다 낮다. B1의 "남은 위험"(스파이크에서 `anon` 최대·OOM kill 재확인)은 이번 실행으로 확인했고, `mem_limit` 상향(P2)은 필요하지 않다.
+- 생성기 코어 평균은 프로세스당 warmup 0.21, spike 0.47~0.48이다. Spark 코어 평균(5초 표본)은 warmup 1.43, spike 2.30, recovery 1.29다.
+
+해석:
+
+- **배치 상한 65,000이 스파이크를 흡수했다.** spike 배치는 대부분 약 60,000건을 3.5~4.4초에 처리해 트리거 주기 안에 끝났다. 2026-11-19 3차 측정(상한 55,000, 튜닝 전)에서는 상한 배치가 평균 5,222ms로 주기를 넘어 backlog가 218,867건까지 쌓였고 회복에 약 40~44초가 걸렸다. 이번에는 회복 2.1초, spike 종단 간 p99가 27.94초에서 12.17초로 줄었다.
+- **backlog는 batch 68(트리거 8,826ms) 한 번에서만 생겼다.** 같은 시각에 Producer ACK p99가 최대 2,962ms로 튀었다. 원인 조사 결과는 아래와 같다([근거 JSON](../measurements/2026-11-23-spark-spike2-stall.json)).
+  - 지연 구간은 14:58:23~14:58:25와 14:58:32~14:58:40 KST 두 번이고, 두 생성기에서 동시에 일어났다. 750초 실행에서 ACK p99가 300ms를 넘은 1초 행 12개가 모두 이 두 구간에 있다.
+  - 두 구간은 이 실행에서 1초를 넘긴 `silver.order_events` 병합 두 건과 겹친다. 14:58:23.7~25.6에 1,859ms(85,665행), 14:58:28.3~37.6에 9,370ms(1,549,484행, 100MB, level 5)다. 1,093ms 병합(06:04 UTC) 때는 지연이 없었다.
+  - 같은 구간에 VM 전체의 메모리·IO 압력이 올랐다(ClickHouse `asynchronous_metric_log`의 `/proc/pressure`). `PSI_MEM_full`은 직전 최대 34ms/s에서 54~371ms/s로, `PSI_IO_some`은 최대 376ms/s로 올랐다. `PSI_CPU_full`은 0이고 steal도 0이다. 차단된 프로세스는 1~4개였다.
+  - `memory.max`에 닿은 컨테이너는 Kafka뿐이다. `memory.peak`가 한도 2GiB와 같고, `memory.events`의 `max`가 8,391회, direct reclaim이 약 39만 페이지다. Spark·ClickHouse는 `max` 0회다. Kafka heap은 512MB로 고정이라, 나머지 약 1.5GB를 page cache가 채우면 쓰기·읽기 중에 cgroup reclaim이 일어난다.
+  - Spark batch 68은 분류 3,647ms(앞 배치 1,672~2,471ms), 정상 쓰기 4,863ms(앞 배치 1,106~1,208ms)였다. 같은 배치 ClickHouse INSERT의 서버 시간은 363~382ms로 평소와 같았다. 14:58:35~37에는 Spark CPU가 0.5~2%였다. 따라서 Spark는 ClickHouse 쓰기가 아니라 Kafka 읽기를 기다린 것으로 본다.
+  - 배제한 원인: Kafka GC(구간 안 GC 없음, 앞뒤 GC 26~28ms), Kafka 브로커 이벤트(로그 없음. segment roll은 14:57:53, 보존 삭제는 14:50), VM 정지(`ops.host_stalls` 없음, 1초 표본 끊김 없음), CPU 포화(`PSI_CPU_full` 0).
+  - 1차 가설: ClickHouse 대형 병합의 디스크 IO와 Kafka cgroup 메모리 한도(2GiB)의 page cache reclaim이 겹쳐 Kafka 브로커가 1~3초 멈췄고, 이 정지가 Producer ACK와 Spark 읽기를 함께 늦췄다. 다만 Kafka `memory.peak`는 이 실행 전부터 이미 2GiB였고(01:26 UTC 기동 후 누적), `memory.events max` 8,391회도 실행 전후 값을 따로 보지 않았다. 따라서 그 시각에 Kafka가 한도에 닿았다는 증거는 없다.
+  - 재현 검증(2026-11-23, 아래): 병합만으로는 재현되지 않았다. 이후 spike4 실행에서 Kafka JVM heap의 swap-in이 원인으로 확인됐다([spike4](#스파이크-재실행-대시보드-닫음-swap-in-기록-2026-11-23)). 이 사고 시각에는 GC가 없었으므로 브로커 스레드의 swap-in으로 추정한다.
+
+#### 병합 재현 검증 (2026-11-23)
+
+- 조건: `steady.csv`(단일 생성기, 5,000 → 7,500 EPS), Spark 새 체크포인트 `merge-repro-20261123`·`latest`, 나머지 설정은 스파이크 판정과 같다. 부하 중 240초·480초에 현재 시간 파티션(`2026-11-23 06:00:00`)을 `OPTIMIZE TABLE silver.order_events PARTITION ... FINAL`로 병합했다. Kafka·ClickHouse·Spark cgroup의 `memory.current`·`memory.stat`·`memory.events`·`memory.pressure`·`io.pressure`와 VM `/proc/pressure`를 1초 간격으로 기록했다.
+- 실행: 06:14:46~06:24:46 UTC. 생성기 run_id `40d6e03a933b4130bbaa1ccd46f74dac`, Spark run_id `a70395e5-e5d1-4a98-b60e-301e03a79e68`. 원자료: [2026-11-23-spark-merge-repro.json](../measurements/2026-11-23-spark-merge-repro.json)
+
+| 구간(UTC) | 병합 | Producer ACK p99 최대 | 큐 최대 | Spark 트리거 |
+| --- | --- | ---: | ---: | --- |
+| 06:15:11~16 (자연 병합) | 3,978ms, 155만 행, 100MB(level 5) | 54.5ms | 257 | 2초대 |
+| 06:16:30~06:18:40 (병합 없음, 5,000 EPS) | - | 71.6ms | 387 | 2초대 |
+| 06:18:46~53 (`OPTIMIZE` 1) | 6,217ms, 249만 행, 161MB(level 6) | 91.1ms | 434 | 2,808·2,908ms |
+| 06:20:00~06:22:40 (병합 없음, 7,500 EPS) | - | 270.5ms | 1,906 | 3초 안팎 |
+| 06:22:46~23:00 (`OPTIMIZE` 2, 7,500 EPS) | 13,012ms, 386만 행, 248MB(level 7) | 282.5ms | 1,724 | 4,524·3,900·4,574ms |
+
+- 결과: 사고 때 병합(100MB, 9.4초)보다 크거나 긴 병합을 두 번 일으켰지만, 초 단위 ACK 정지는 나오지 않았다. 병합 구간의 ACK p99는 같은 부하의 병합 없는 구간과 같은 수준이다. Spark 트리거는 병합 중 약 1~1.7초 늘었지만(batch 95~97) 5초 안이었고, 사고 때처럼 Spark CPU가 0으로 떨어지는 대기는 없었다.
+- 압력: Kafka cgroup은 `memory.events max`가 늘지 않았다(0회). `memory.current` 최대 1,355MiB, `file` 최대 739MiB로 한도 2GiB에 닿지 않았다. 병합 중 메모리 압력은 ClickHouse cgroup에서 생겼다(`memory.pressure` full 최대 162ms/s). VM 전체 `PSI_MEM_full`은 최대 106ms/s로 사고 때(최대 371ms/s)의 약 1/3이었다.
+- 해석: ClickHouse 대형 병합은 단독으로 Kafka ACK를 초 단위로 멈추지 않는다. 사고와 다른 조건은 (1) 입력 12,000 EPS·생성기 2개와 (2) Kafka cgroup이 한도 근처였을 가능성이다. (2)는 이번 재현에서 Kafka 사용량이 1.3GiB에 그쳐 확인하지 못했다. 사고 때 VM 메모리 압력이 3배 컸으므로, 어느 cgroup에서 압력이 생겼는지가 다음 확인 대상이다.
+- 남은 작업: 같은 1초 cgroup 샘플러를 켜고 `spike-half.csv` 2개로 다시 실행해, 재발하면 압력이 어느 cgroup에서 생기는지 확인한다. 재발하지 않으면 실행 1회의 일시 현상으로 기록하고 종료한다.
+
+#### 스파이크 재실행: 1초 cgroup 샘플러 (2026-11-23)
+
+- 조건: 스파이크 판정과 같다(생성기 2개 × `spike-half.csv`, Spark 새 체크포인트 `spike3-20261123`·`latest`). 병합 재현 검증의 1초 cgroup 샘플러를 함께 켰다. 실행 중 Grafana 대시보드가 열려 있었다(아래).
+- 실행: 06:43:50~06:56:20 UTC. 생성기 run_id `dd63a764f5b74db6a506aec4609485d4`·`814cf7f508e0455ca4f3e216025056fc`, Spark run_id `e9262774-4294-47e4-9d14-73b9e7dd8cce`. 원자료: [2026-11-23-spark-spike3.json](../measurements/2026-11-23-spark-spike3.json)(`analyze_profile.py` 출력 + `cgroup_1s` + `notes`). Grafana 캡처(06:43:20~06:57:20 UTC): [파이프라인 운영](../../images/2026-11-23-spark-spike3/pipeline.png), [주문 현황](../../images/2026-11-23-spark-spike3/orders.png).
+
+**판정: 스파이크 기준 불합격. 대시보드 조회 부하가 섞여 판정에는 쓰지 않는다.**
+
+| 항목 | spike2(판정 실행) | spike3(이번) |
+| --- | ---: | ---: |
+| spike 생성 EPS | 11,890 | 11,243(−6.3%, 기준 1 미달) |
+| spike 트리거 평균 / 최대 | 4,129 / 8,826ms | 6,804 / 11,117ms |
+| backlog 최대 | 17,555 | 184,516(spike), 167,474(recovery) |
+| 회복 시간 | 2.1초 | 61.2초(기준 60초 초과) |
+| spike 종단 간 p99 | 12.17초 | 38.12초 |
+| ClickHouse CPU 상한 걸린 주기 | 4.8% | 16.2%(190.4초) |
+| `grafana_reader` 쿼리 CPU | 14.2초 | 188.0초 |
+| 공통(건수·오류·재시작) | 통과 | 통과(생성 = ACK 4,610,560, 정상 3,919,336 = silver = 고유 수, 시도 140개 모두 성공) |
+
+- 대시보드 조회: `grafana_reader` 쿼리가 실행 전부터 분당 약 58개로 일정했다. spike2 실행 때는 분당 약 14개였으므로 대시보드가 자동 새로고침으로 열려 있었던 것으로 본다. 쿼리 CPU는 실행 데이터가 쌓이면서 분당 1.5초에서 15초로 늘었다. ClickHouse(`cpus` 2)가 CPU 상한에 걸리면서 Spark 정상 쓰기가 느려졌다. [측정 방법](06-load-profile.md#측정-방법)에 대시보드를 닫는다는 조건이 없어 이번에 생긴 문제다.
+- ACK 정지 재발: 두 생성기에서 동시에 ACK p99가 1초 안팎으로 튄 구간이 다시 나왔다(06:51:27~36 최대 988ms, 06:51:48~49 최대 1,325ms).
+- 1초 cgroup 기록:
+  - Kafka cgroup은 실행 내내 `memory.events max`가 늘지 않았다. `memory.current` 최대 1,476MiB, `file` 최대 850MiB였다. **Kafka 메모리 한도 가설은 기각한다.**
+  - 정지 순간에 Kafka cgroup의 `io.pressure` some이 튀었다. 06:51:27에 253ms/s, 06:51:46에 394ms/s, 06:51:47에 192ms/s다. 정지 구간 밖에서는 대부분 0~10ms/s다. Kafka `memory.pressure`는 같은 시각 0~23ms/s로 작다.
+  - 06:51:47.830에 Kafka Young GC(132)가 1,167ms 걸렸다(User 0.86s, Sys 0.77s, Real 1.17s). 앞뒤 GC는 82·95ms다. 평소와 달리 Sys 시간이 커서 GC 스레드가 커널 안(page fault 등)에서 막힌 것으로 본다. 06:51:48~49 정지는 이 GC와 겹친다.
+- 스왑: 실행 뒤 VM 스왑 사용량은 1,537MiB/4,096MiB였다. Kafka cgroup의 `memory.swap.current`는 168MiB, ClickHouse는 99MiB, Spark는 0이다. Kafka heap은 `-Xms512m -Xmx512m`라 전부 확보되어 있으므로, heap 일부가 스왑으로 나가 있었을 수 있다(확인하지 않음).
+- 해석: 재발한 정지는 Kafka 프로세스가 커널에서 IO를 기다리며 멈춘 것과 맞다. 후보는 (1) 스왑으로 나간 Kafka heap·버퍼를 다시 읽는 swap-in과 (2) page cache에서 밀려난 로그를 consumer fetch(`sendfile`)가 디스크에서 읽으면서 네트워크 스레드가 막히는 것이다. 이번 샘플러는 `pswpin`·`pgmajfault`를 기록하지 않아 둘을 구분하지 못한다. 14:58 사고의 VM `PSI_MEM_full` 급증은 swap-in 대기도 포함하므로 (1)과도 맞다.
+- 다음 확인: 대시보드를 닫고, cgroup별 `pswpin`·`pgmajfault`·`workingset_refault_file`을 1초 간격으로 추가 기록해 같은 조건으로 다시 실행한다. (1)이 맞으면 Kafka `memswap_limit`을 `mem_limit`과 같게 두어 스왑을 막고 재측정한다.
+
+#### 스파이크 재실행: 대시보드 닫음, swap-in 기록 (2026-11-23)
+
+- 조건: spike3와 같다. 실행 전에 Grafana 대시보드를 닫았고(사용자가 Grafana 컨테이너도 중지), 측정 중 대시보드 쿼리는 0건이었다. 1초 샘플러에 cgroup별 `pswpin`·`pswpout`·`pgmajfault`와 VM `/proc/vmstat`을 추가했다.
+- 실행: 07:09:09~07:21:39 UTC. 생성기 run_id `e27177fd6f9949c7ac2b57f602e8ed90`·`d6d42920f62f409a968b864cbde37543`, Spark run_id `2b462d25-7468-4738-bb1d-fe4b42ad1783`. 원자료: [2026-11-23-spark-spike4.json](../measurements/2026-11-23-spark-spike4.json)(`analyze_profile.py` 출력 + `cgroup_1s` + `notes`). Grafana 캡처(07:08:40~07:22:40 UTC, 측정 뒤 Grafana를 잠시 켜서 찍음): [파이프라인 운영](../../images/2026-11-23-spark-spike4/pipeline.png), [주문 현황](../../images/2026-11-23-spark-spike4/orders.png).
+
+**판정: 스파이크 기준 1~3과 공통 기준 통과.** spike2에 이어 두 번째 통과다.
+
+| 기준 | spike2 | spike4 |
+| --- | ---: | ---: |
+| spike 생성 EPS | 11,890(−0.9%) | 11,627(−3.1%) |
+| spike 트리거 평균 / 최대 | 4,129 / 8,826ms | 4,907 / 6,276ms |
+| backlog 최대 | 17,555 | 5,584 |
+| 회복 시간 | 2.1초 | 1.2초 |
+| spike 종단 간 p99 / 최대 | 12.17 / 13.96초 | 9.85 / 10.75초 |
+| 공통 | 통과 | 통과(생성 = ACK 4,727,946, 정상 4,018,647 = silver = 고유 수, 시도 152개 모두 성공, 재시작 0) |
+| CPU 상한 걸린 주기 spark / clickhouse / kafka | 12.8 / 4.8 / 4.3% | 8.2 / 3.8 / 4.3% |
+
+**ACK 정지 원인 확정: Kafka JVM heap의 swap-in.**
+
+- 07:15:43에 두 생성기 ACK p99가 1,849·1,828ms로 튀었다(큐 최대 10,363). 같은 시각 Kafka G1 concurrent mark cycle(GC 154)이 07:15:40.1~43.9에 돌았다. 그중 stop-the-world인 Pause Remark가 07:15:42.099~43.883에 1,785ms 걸렸다. 평소 Young GC는 40~80ms다.
+- 07:15:41~44에 Kafka cgroup에서 swap-in이 몰렸다. 초당 `pswpin` 1,304~2,477페이지, `pgmajfault` 759~1,780, `io.pressure` some 100~152ms/s였다. 실행 전체 Kafka swap-in 7,213페이지(약 28MB) 중 약 84%가 이 4초에 있다. 다른 시각에는 0이다. ClickHouse·Spark cgroup은 같은 시각 swap-in이 0~12페이지다.
+- 해석: Kafka heap(`-Xms512m -Xmx512m`) 중 오래 쓰지 않은 영역이 스왑에 나가 있었다(실행 전 Kafka `memory.swap.current` 168MiB). G1 marking은 old·humongous 영역까지 heap 전체를 훑으므로, 이때 스왑에 나간 페이지를 디스크에서 다시 읽는다. Remark는 stop-the-world라서 그동안 브로커의 요청 처리가 모두 멈추고, Producer ACK와 Spark fetch가 함께 늦어진다.
+- 앞선 관측과 맞춰 보면:
+  - spike3 06:51:47의 Young GC 1,167ms(Sys 0.77s)도 같은 구조다. GC가 스왑에 나간 페이지를 만나 커널에서 기다렸다.
+  - 14:58 사고(spike2)와 spike3 06:51:27 정지는 GC와 겹치지 않았다. 그때는 GC가 아닌 브로커 스레드가 스왑에 나간 메모리를 만났을 가능성이 크다. VM `PSI_MEM_full`(swap-in 대기 포함)과 Kafka `io.pressure`가 함께 오른 점이 이와 맞는다. 다만 그 두 실행은 `pswpin`을 기록하지 않아 직접 증거는 없다.
+  - ClickHouse 병합은 VM 메모리 압력을 키워 스왑 아웃을 늘리는 배경 요인일 수 있다. 하지만 병합만으로는 정지가 재현되지 않았다([병합 재현 검증](#병합-재현-검증-2026-11-23)).
+- Kafka가 스왑에 들어간 이유: Kafka cgroup은 01:26 UTC 기동 뒤 `memory.max`(2GiB)에 8,391회 닿았다(이번 세션의 실행들에서는 0회). 한도 reclaim과 VM 전체 reclaim이 page cache와 함께 heap의 차가운 페이지를 스왑으로 내보냈다. VM 스왑 사용량은 약 1.5GiB다.
+- 조치 후보(미적용):
+  1. Kafka 컨테이너에 `memswap_limit`을 `mem_limit`과 같게(2g) 둬 스왑을 막는다. 한도에 닿으면 page cache만 회수된다. 적용하려면 Kafka 컨테이너를 다시 만들어야 하고, 그 뒤 spike를 다시 측정한다.
+  2. 같은 이유로 ClickHouse(스왑 99MiB)도 검토한다. Spark는 스왑 0이다.
+
+#### Kafka 스왑 차단 후 스파이크 재측정 (2026-11-23)
+
+- 변경: Kafka에 `memswap_limit: 2g`(= `mem_limit`)를 적용했다([Kafka PRD](02-kafka-ingestion.md)). 컨테이너를 07:47 UTC에 다시 만들었고, `memory.swap.max` 0을 확인했다. 나머지 조건은 spike4와 같다(대시보드 닫음, 측정 중 `grafana_reader` 쿼리 0건, 1초 샘플러).
+- 실행: 07:50:40~08:03:10 UTC. 생성기 run_id `fbbc5f31d3784944b124455a71f7d9fa`·`c9f3052405dc4c8a93c0adb327b34c65`, Spark run_id `f6e3cd71-3e23-482b-bbf2-0b8f68a5067d`, 체크포인트 `spike5-20261123`. 원자료: [2026-11-23-spark-spike5.json](../measurements/2026-11-23-spark-spike5.json). Grafana 캡처(07:50:10~08:04:10 UTC, 측정 뒤 Grafana를 잠시 켜서 찍음): [파이프라인 운영](../../images/2026-11-23-spark-spike5/pipeline.png), [주문 현황](../../images/2026-11-23-spark-spike5/orders.png).
+
+**판정: 스파이크 기준 1~3과 공통 기준 통과.** 회귀는 없다.
+
+| 항목 | spike4(스왑 허용) | spike5(스왑 차단) |
+| --- | ---: | ---: |
+| spike 생성 EPS | 11,627(−3.1%) | 11,663(−2.8%) |
+| spike ACK p95 최대 / 100ms 이내 비율 | 1,763ms / 90.2% | 207ms / 91.7% |
+| spike 트리거 평균 / 최대 | 4,907 / 6,276ms | 4,653 / 5,959ms |
+| backlog 최대 | 5,584 | 3,117 |
+| 회복 시간 | 1.2초 | 4.9초 |
+| spike 종단 간 p99 / 최대 | 9.85 / 10.75초 | 9.70 / 10.48초 |
+| 공통 | 통과 | 통과(생성 = ACK 4,738,360, 정상 4,028,051 = silver = 고유 수, 시도 151개 모두 성공, 재시작 0) |
+| Kafka swap-in / 스왑 사용량 | 7,213페이지 / 168MiB | 0 / 0 |
+| Kafka GC 150ms 초과 | Remark 1,785ms | 없음 |
+| Kafka `memory.events` max / OOM kill | 0 / 0 | 0 / 0 |
+| Kafka anon / `memory.current` 최대 | 626 / 2,015MiB | 721 / 1,674MiB |
+
+- ACK p99가 300ms를 넘은 1초 행은 실행 첫 1초(07:50:40, 692·696ms)뿐이다. 판정에서 빼는 워밍업 구간이다. 새로 띄운 Kafka JVM의 첫 요청이라 그런 것으로 본다(확인하지 않음).
+- Kafka anon 최대가 626MiB에서 721MiB로 늘었다. 스왑에 나갈 수 없어 heap 전체가 RAM에 남기 때문이다. 한도 2GiB까지 여유가 크다.
+- 한계: Kafka를 방금 다시 만들어서, 차단이 없었더라도 아직 스왑이 쌓이기 전이다. 이 실행은 차단 뒤 OOM·회귀가 없음을 확인할 뿐이다. 스왑으로 인한 정지가 사라졌다는 증거는 아니다. 효과를 확인하려면 Kafka가 한도 근처에서 몇 시간 운영된 뒤 `memory.swap.current`가 0이고 swap-in 정지가 없는지 본다.
+- 회복 시간 1.2초 → 4.9초는 성능 차이가 아니다. 회복 시간은 spike 종료(경과 450초) 뒤 조건을 만족한 첫 배치가 끝난 시각까지라서, 배치 주기 5초 안에서 값이 정해진다. 두 실행 모두 spike 종료 전 배치에서 이미 backlog가 0이었다(spike4 446.3초, spike5 449.9초). 그래서 종료 뒤 첫 배치에서 바로 회복으로 집계됐다(spike4 451.2초, spike5 454.9초). spike5는 직전 배치가 종료 0.1초 전에 끝나 집계에서 빠졌을 뿐이다. backlog가 실제로 쌓였다 해소되는 실행(예: [스파이크 측정 3차](06-load-profile.md#스파이크-프로파일-측정-3차-spike-12000-eps-배치-상한-55000건-2026-11-19), 회복 약 40~44초)에서만 이 값으로 처리 능력을 비교할 수 있다. 이번 두 실행의 처리 능력은 backlog 최대(5,584 → 3,117), spike 트리거 평균(4,907 → 4,653ms), spike 종단 간 p99(9.85 → 9.70초)로 비교한다. 모두 spike5가 같거나 조금 낫지만 실행이 각 1회라 차단 효과로 단정하지 않는다.
+
+#### Kafka 스왑 A/B 재현: A(스왑 허용) (2026-11-23)
+
+- 목적: 스왑 정지가 일어난 조건을 다시 만들고, 스왑 허용(A)과 차단(B)에서 정지와 OOM 여부를 비교한다. A를 먼저 실행했다.
+- A 조건: `compose.yaml`에서 Kafka `memswap_limit`을 잠시 빼고 Kafka를 다시 만들었다(`memory.swap.max` 2GiB). 실행 뒤 파일은 원래대로 되돌렸다.
+- 압력 단계(08:19:40~08:29:46 UTC): 생성기 1개를 5,000 EPS 고정으로 10분 돌렸다. 동시에 별도 컨테이너에서 `kafka-consumer-perf-test`로 DLQ 토픽(5.7GB)과 raw 토픽(1.3GB)을 처음부터 반복해 읽었다. 목적은 Kafka page cache를 한도까지 채워 cgroup 한도 회수를 계속 일으키는 것이다.
+- spike 단계: 압력 단계 직후 spike4와 같은 조건으로 실행했다(생성기 2개, 대시보드 닫음, 1초 샘플러). 생성기 run_id `7d5845f6c1ba4065b5029015e3beef72`·`597ae0e4043d4d4da23ede32ebfc8dbc`, Spark run_id `0f8383dc-6789-4797-85b6-647915a75265`, 체크포인트 `abA-spike-20261123`.
+- 원자료: [2026-11-23-kafka-swap-ab-a.json](../measurements/2026-11-23-kafka-swap-ab-a.json)(압력 단계 전후 Kafka cgroup, 1초 샘플, spike `analyze_profile.py` 출력)
+
+| 항목 | 압력 단계 | spike 단계 |
+| --- | --- | --- |
+| Kafka `memory.events` max 증가 | 0 → 13,033 | 13,033 → 16,383 |
+| Kafka `memory.current` | 519MiB → 1,955MiB(한도 근처 유지) | - |
+| Kafka anon / file | 433 → 611MiB / 78 → 1,313MiB | - |
+| Kafka `pswpout` / `memory.swap.current` | 0 / 0 | 0 / 0 |
+| Kafka GC 150ms 초과 / OOM kill | 0 / 0 | 0 / 0 |
+
+- spike 판정: 통과(spike 생성 11,687 EPS, 트리거 평균 4,769ms, 최대 5,687ms, backlog 최대 111, 회복 3.2초, 건수 대조 일치, 시도 151개 모두 성공). ACK p99가 300ms를 넘은 1초 행은 실행 첫 1초(08:30:22, 515ms)뿐이다.
+- **결과: 재현 실패.** Kafka가 한도에 16,383회 닿았지만 커널은 page cache만 회수했고, anon은 1페이지도 스왑으로 보내지 않았다. 스왑이 없었으므로 정지도 없었다.
+- 해석: 회수할 수 있는 page cache가 많으면, cgroup 한도 회수는 anon보다 page cache를 먼저 회수한다. 그러므로 앞서 본 Kafka 스왑 168MiB는 cgroup 한도 회수만으로 생긴 것이 아니다. VM 전체 메모리가 부족했을 때의 전역 회수에서 생겼을 가능성이 크다(추정). 당시 VM 스왑 사용량은 1.5GiB였다. 지금 VM은 가용 메모리 약 5.7GiB이고, `/proc/vmstat` `pswpout`은 07:05 이후 약 1.3시간 동안 18,912페이지(약 74MiB)만 늘었다. 이번 세션에서는 전역 회수가 거의 일어나지 않는 상태다.
+- B(스왑 차단)는 같은 절차로는 A와 차이가 날 수 없어 실행하지 않았다. 재현하려면 VM 전체 메모리 압력을 일부러 만들어야 한다.
+- 결정(2026-11-23): 효과 근거가 부족해 Kafka `memswap_limit`을 되돌렸다. `compose.yaml`은 스왑 차단 전과 같다. 실행 중인 Kafka도 A 단계에서 다시 만든 컨테이너라 스왑 허용 상태다. VM 전체 메모리 압력 재현은 하지 않았다. [spike5](#kafka-스왑-차단-후-스파이크-재측정-2026-11-23) 기록은 차단 상태의 참고 측정으로 남긴다.
+- spike 구간 종단 간 p99 12.17초는 평시 목표(10초)를 넘지만, 스파이크 기준은 spike 중 지연을 기록만 한다.
+- 근거는 실행 1회다.
 
 ### D1 결정 기록: 배치 내 중복 제거 제거 (2026-11-23)
 
