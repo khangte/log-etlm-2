@@ -234,7 +234,22 @@
 - 단위 테스트: 설정 검증(0 이하, stdout·file에서 2 이상, worker에 0 EPS·0건이 배정되는 값 거부), EPS·구간 eps·최대 건수·seed 분배(`step.csv` × 3 worker의 구간별 합 = 원래 eps), stderr `worker` 키. 생성기 테스트 52개 통과.
 - Kafka 연동(kafka·clickhouse만 기동, Spark 없음): `PRODUCER_WORKERS=2`, `PRODUCER_EPS=2001`, `PRODUCER_MAX_EVENTS=20001`로 실행했다. worker 0/1이 목표 1,001/1,000 EPS로 10,001/10,000건을 보냈고 ACK도 같았다. 종료 코드 0. `ops.producer_stats`에는 run_id 2개가 각각 11행, `generated`·`acked` 합계 10,001/10,000건으로 기록됐다.
 - 종료 처리: 무제한 실행 중 부모에 SIGINT를 보내자 두 worker가 `interrupted`로 끝났고 종료 코드는 130이었다. Kafka가 꺼진 상태에서는 두 worker가 `output_error`로 끝났고 종료 코드는 1이었다.
-- 부하 확인(`step.csv`를 `PRODUCER_WORKERS=2`로 실행해 `step-half.csv` 2개 결과와 비교)은 하지 않았다.
+- 부하 확인(5분, 2026-11-23 12:03:39~12:08:39 UTC): `step.csv`의 구간을 50초씩 줄인 임시 프로파일(5k/8k/9k/10k/11k/12k)을 `PRODUCER_WORKERS=2` 생성기 1개로 실행했다. 전체 스택이며, Spark는 새 체크포인트 `workers2-5min-20261123`·`latest`로 부하 약 20초 전에 올렸다. 원자료 [2026-11-23-generator-workers2.json](../measurements/2026-11-23-generator-workers2.json), Grafana 캡처 [파이프라인 운영](../../images/2026-11-23-generator-workers2/pipeline.png)·[주문 현황](../../images/2026-11-23-generator-workers2/orders.png).
+
+  | 구간 | 생성 EPS(두 worker 합, 경계 1초 제외) | 목표 대비 | worker CPU 평균(각각) | Spark 트리거 평균 / 최대 | backlog 최대 |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | 5k | 4,908 | −1.8% | 0.35 / 0.35코어 | — | 0 |
+  | 8k | 7,827 | −2.2% | 0.51 / 0.50코어 | — | 0 |
+  | 9k | 8,913 | −1.0% | 0.47 / 0.47코어 | 4,262 / 5,733ms | 0 |
+  | 10k | 9,833 | −1.7% | 0.55 / 0.54코어 | 4,796 / 5,398ms | 0 |
+  | 11k | 10,837 | −1.5% | 0.58 / 0.58코어 | 5,098 / 6,180ms | 0 |
+  | 12k | 11,627 | −3.1% | 0.65 / 0.65코어 | 5,890 / 7,707ms | 26,857 |
+
+  - 모든 구간의 생성 EPS가 목표의 ±5% 안이다. 두 worker가 절반씩 나눠 보냈고, worker CPU는 최대 0.95코어로 프로세스 1개의 포화(1코어)에 닿지 않았다. 부모·resource tracker 프로세스 CPU는 0이었다.
+  - 공통: 생성 = ACK 2,696,015건, `silver.order_events` 2,291,843행 = 고유 `event_id` 수, Spark 시도 60개 모두 성공, 재시작 0, worker 종료 코드 0·0. VM 사용 코어 평균 5.34 / p95 6.80, VM 정지 기록 없음.
+  - 9k~11k는 backlog 없이 처리했다. 12k는 배치가 상한(64,999건)에 닿으며 backlog가 쌓였고(기울기 +587건/초), 생성 종료 뒤 경과 304.8초 배치에서 0이 됐다. [생성기 2개 step 재측정](03-stream-processing.md#지속-용량-판정-생성기-2개-step-재측정-2026-11-23)(120초 구간)의 12k 단계도 backlog 최대 24,354건이었다.
+  - 판정: 생성기 기능은 통과. 생성기 1개 + `PRODUCER_WORKERS=2`로 `step.csv`의 전 단계(최대 12,000 EPS)를 ±5% 안에서 만든다. Spark 지속 용량은 판정하지 않는다. 구간이 50초라 [판정 기준](06-load-profile.md#판정-기준)(시작 120초 제외, 마지막 60초 backlog 추세)을 그대로 적용할 수 없다.
+  - 처음 실행한 2분(20초 구간) 확인은 구간이 너무 짧아 이 5분 실행으로 대체하고 기록에서 뺐다.
 
 ## 처리지연 측정
 
