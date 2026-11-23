@@ -136,9 +136,10 @@ infra/grafana/
 | Spark 재시작 | `ops.spark_query_progress`의 `run_id` 변화. 같은 `query_id`에서 `run_id`가 바뀌면 재시작 1회 |
 | ClickHouse INSERT 요청별 처리시간·실패 | `system.query_log`. `user = 'spark_writer'`로 Spark 적재 요청만 거름 |
 | part 생성·병합 | `system.part_log` |
-| 로그 생성기·Producer 지표 | `ops.producer_stats`. 1초 구간 통계이며 구간별 분위수를 다시 합치지 않음 |
+| 로그 생성기·Producer 지표 | `ops.producer_stats`. 1초 구간 통계이며 구간별 분위수를 다시 합치지 않음. 생성기 프로세스가 여럿이면(`PRODUCER_WORKERS` ≥ 2, `run_id`가 여럿) `toStartOfSecond(interval_start)`로 묶는다. 건수·목표 EPS·큐 길이는 합, 분위수는 프로세스 중 최대, 분위수 측정 건수는 합으로 표시한다(2026-11-23) |
 | Grafana 조회 서버 시간 | `system.query_log`의 `user = 'grafana_reader'` 행 |
 
+- 생성기 패널 합산 검증(2026-11-23): `PRODUCER_WORKERS=2` 5분 실행(run_id `2e22dd9c…`·`900b69ef…`) 300초와 생성기 2개 step 재측정 720초 모두 1초 칸마다 프로세스 행이 정확히 2개였다. 12k 구간 12:08:30~32 UTC의 ACK 합은 12,040·11,733·12,015, 목표 합은 12,000이었다. 캡처: [파이프라인 운영](../../images/2026-11-23-grafana-producer-sum/pipeline.png)(5분 실행 구간). 프로세스 시작 시각이 1초 이상 어긋나면 칸 경계에 걸린 행 때문에 합이 출렁일 수 있다.
 - `query_log`·`part_log`의 flush 주기는 서버 기본 설정 7,500ms다(2026-11-18 실행 중인 서버의 `config.xml`에서 확인). 해당 패널은 최대 약 7.5초 늦게 반영되며 패널 설명에 적는다. 이 값을 바꾸지 않는다.
 - 운영 대시보드는 최근 15분 조회·5초 갱신을 기본값으로 한다. 5초는 Grafana 기본 `min_refresh_interval`과 같고 Spark 트리거 주기와 같다. 시간 버킷은 5초(트리거 1회분)로 하며, 백분위 패널의 집계 구간을 패널 설명에 적는다. 미수집·미계측 값은 0이 아닌 측정 불가로 표시한다.
 

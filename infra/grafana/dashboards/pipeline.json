@@ -336,7 +336,7 @@
           },
           "editorType": "sql",
           "format": 0,
-          "rawSql": "SELECT interval_start AS t, acked AS `ACK`, generated AS `생성`, target_eps AS `목표`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) ORDER BY t"
+          "rawSql": "SELECT toStartOfSecond(interval_start) AS t, sum(acked) AS `ACK`, sum(generated) AS `생성`, sum(target_eps) AS `목표`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) GROUP BY t ORDER BY t"
         }
       ],
       "fieldConfig": {
@@ -391,7 +391,7 @@
           },
           "editorType": "sql",
           "format": 0,
-          "rawSql": "SELECT interval_start AS t, failed AS `전송 실패`, undelivered AS `미전달`, queue_len_max AS `큐 길이 최대`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) ORDER BY t"
+          "rawSql": "SELECT toStartOfSecond(interval_start) AS t, sum(failed) AS `전송 실패`, sum(undelivered) AS `미전달`, sum(queue_len_max) AS `큐 길이 최대`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) GROUP BY t ORDER BY t"
         }
       ],
       "fieldConfig": {
@@ -459,7 +459,7 @@
           },
           "editorType": "sql",
           "format": 0,
-          "rawSql": "SELECT interval_start AS t,\n  if(gen_serialize_us_count = 0, NULL, gen_serialize_us_p50) AS p50,\n  if(gen_serialize_us_count = 0, NULL, gen_serialize_us_p95) AS p95,\n  if(gen_serialize_us_count = 0, NULL, gen_serialize_us_p99) AS p99\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) ORDER BY t"
+          "rawSql": "SELECT toStartOfSecond(interval_start) AS t,\n  maxIfOrNull(gen_serialize_us_p50, gen_serialize_us_count > 0) AS p50,\n  maxIfOrNull(gen_serialize_us_p95, gen_serialize_us_count > 0) AS p95,\n  maxIfOrNull(gen_serialize_us_p99, gen_serialize_us_count > 0) AS p99\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) GROUP BY t ORDER BY t"
         }
       ],
       "fieldConfig": {
@@ -514,7 +514,7 @@
           },
           "editorType": "sql",
           "format": 0,
-          "rawSql": "SELECT interval_start AS t,\n  if(ack_latency_ms_count = 0, NULL, ack_latency_ms_p50) AS p50,\n  if(ack_latency_ms_count = 0, NULL, ack_latency_ms_p95) AS p95,\n  if(ack_latency_ms_count = 0, NULL, ack_latency_ms_p99) AS p99,\n  ack_latency_ms_count AS `측정 건수`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) ORDER BY t"
+          "rawSql": "SELECT toStartOfSecond(interval_start) AS t,\n  maxIfOrNull(ack_latency_ms_p50, ack_latency_ms_count > 0) AS p50,\n  maxIfOrNull(ack_latency_ms_p95, ack_latency_ms_count > 0) AS p95,\n  maxIfOrNull(ack_latency_ms_p99, ack_latency_ms_count > 0) AS p99,\n  sum(ack_latency_ms_count) AS `측정 건수`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) GROUP BY t ORDER BY t"
         }
       ],
       "fieldConfig": {
@@ -586,7 +586,7 @@
           },
           "editorType": "sql",
           "format": 0,
-          "rawSql": "SELECT interval_start AS t,\n  if(gen_to_kafka_ms_count = 0, NULL, gen_to_kafka_ms_p50) AS p50,\n  if(gen_to_kafka_ms_count = 0, NULL, gen_to_kafka_ms_p95) AS p95,\n  if(gen_to_kafka_ms_count = 0, NULL, gen_to_kafka_ms_p99) AS p99,\n  gen_to_kafka_ms_count AS `측정 건수`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) ORDER BY t"
+          "rawSql": "SELECT toStartOfSecond(interval_start) AS t,\n  maxIfOrNull(gen_to_kafka_ms_p50, gen_to_kafka_ms_count > 0) AS p50,\n  maxIfOrNull(gen_to_kafka_ms_p95, gen_to_kafka_ms_count > 0) AS p95,\n  maxIfOrNull(gen_to_kafka_ms_p99, gen_to_kafka_ms_count > 0) AS p99,\n  sum(gen_to_kafka_ms_count) AS `측정 건수`\nFROM ops.producer_stats WHERE $__timeFilter(interval_start) GROUP BY t ORDER BY t"
         }
       ],
       "fieldConfig": {
