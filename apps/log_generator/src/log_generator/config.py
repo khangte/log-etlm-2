@@ -8,7 +8,7 @@
 import csv
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -78,6 +78,7 @@ class Config:
     kafka: KafkaConfig | None  # output이 kafka일 때만 값이 있다.
     clickhouse: ClickHouseConfig | None  # kafka 출력이고 URL이 있을 때만 생성기 지표를 기록한다.
     profile: LoadProfile | None  # 있으면 eps 대신 구간별 eps를 쓴다.
+    workers: int  # 생성 프로세스 수. 2 이상이면 EPS·최대 건수를 나눠 worker 프로세스로 실행한다.
 
 
 def _value(environ: Mapping[str, str | None], key: str, *, allow_empty: bool = False) -> str:
@@ -186,7 +187,7 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
     seed = _value(env, "PRODUCER_SEED", allow_empty=True)
     # 빈 프로파일 경로는 PRODUCER_EPS 고정 속도를 뜻한다.
     raw_profile = _value(env, "PRODUCER_LOAD_PROFILE", allow_empty=True)
-    return Config(
+    config = Config(
         eps=_int(env, "PRODUCER_EPS", minimum=1),
         output=output,
         output_path=output_path,
@@ -197,4 +198,42 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         kafka=kafka if output == "kafka" else None,
         clickhouse=clickhouse,
         profile=load_profile(raw_profile) if raw_profile else None,
+        workers=_int(env, "PRODUCER_WORKERS", minimum=1),
+    )
+    _check_workers(config)
+    return config
+
+
+def _check_workers(config: Config) -> None:
+    """worker 수가 2 이상이면 출력 대상과, 나눴을 때 0이 되는 EPS·최대 건수를 거부한다."""
+    n = config.workers
+    if n == 1:
+        return
+    if config.output != "kafka":
+        raise ConfigError(f"PRODUCER_WORKERS >= 2 requires PRODUCER_OUTPUT=kafka: {config.output!r}")
+    rates = [s.eps for s in config.profile.segments] if config.profile else [config.eps]
+    if min(rates) < n:
+        raise ConfigError(f"every EPS must be >= PRODUCER_WORKERS ({n}): min {min(rates)}")
+    if config.max_events is not None and config.max_events < n:
+        raise ConfigError(f"PRODUCER_MAX_EVENTS must be 0 or >= PRODUCER_WORKERS ({n}): {config.max_events}")
+
+
+def _share(total: int, n: int, index: int) -> int:
+    """total을 n개로 나눈 index번째 몫. 나머지는 앞 번호부터 1씩 더한다."""
+    return total // n + (1 if index < total % n else 0)
+
+
+def worker_config(config: Config, index: int) -> Config:
+    """index번째 worker 설정. EPS·구간 eps·최대 건수를 나누고 seed를 index만큼 바꾼다."""
+    n = config.workers
+    profile = config.profile
+    if profile:
+        profile = replace(profile, segments=tuple(replace(s, eps=_share(s.eps, n, index)) for s in profile.segments))
+    return replace(
+        config,
+        eps=_share(config.eps, n, index),
+        max_events=_share(config.max_events, n, index) if config.max_events else None,
+        seed=config.seed + index if config.seed is not None else None,
+        profile=profile,
+        workers=1,
     )

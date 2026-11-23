@@ -17,9 +17,9 @@ from unittest.mock import patch
 from jsonschema import Draft202012Validator, FormatChecker
 
 from log_generator import pools
-from log_generator.config import ClickHouseConfig, Config, ConfigError, LoadProfile, Segment, load_config, load_profile
+from log_generator.config import ClickHouseConfig, Config, ConfigError, LoadProfile, Segment, load_config, load_profile, worker_config
 from log_generator.generator import EventGenerator, serialize
-from log_generator.main import run
+from log_generator.main import _WorkerErr, run
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
 VALIDATORS = {
@@ -175,6 +175,7 @@ ENV_VALUES = {
     "PRODUCER_CLICKHOUSE_HTTP_URL": "",
     "CLICKHOUSE_GENERATOR_PASSWORD": "",
     "PRODUCER_LOAD_PROFILE": "",
+    "PRODUCER_WORKERS": "1",
 }
 PROFILES = Path(__file__).resolve().parents[1] / "profiles"
 
@@ -182,7 +183,7 @@ PROFILES = Path(__file__).resolve().parents[1] / "profiles"
 class ConfigTests(unittest.TestCase):
     def test_explicit_env_values(self):
         config = load_config(ENV_VALUES)
-        self.assertEqual(config, Config(5000, "stdout", None, 300000, 500, None, 1, None, None, None))
+        self.assertEqual(config, Config(5000, "stdout", None, 300000, 500, None, 1, None, None, None, 1))
         config = load_config(ENV_VALUES | {"PRODUCER_EPS": "100", "PRODUCER_SEED": "-3",
                                           "PRODUCER_MAX_EVENTS": "0"})
         self.assertEqual((config.eps, config.seed, config.max_events), (100, -3, None))
@@ -268,6 +269,10 @@ class ConfigTests(unittest.TestCase):
             {"PRODUCER_KAFKA_FLUSH_TIMEOUT_SEC": "x"},
             {"PRODUCER_OUTPUT": "file"},
             {"PRODUCER_OUTPUT": "file", "PRODUCER_OUTPUT_PATH": "/nonexistent-dir/x.jsonl"},
+            {"PRODUCER_WORKERS": "0"},
+            {"PRODUCER_WORKERS": "2"},  # stdout 출력은 1개만 허용
+            {"PRODUCER_OUTPUT": "kafka", "PRODUCER_WORKERS": "3", "PRODUCER_EPS": "2"},  # worker에 0 EPS
+            {"PRODUCER_OUTPUT": "kafka", "PRODUCER_WORKERS": "3", "PRODUCER_MAX_EVENTS": "2"},
         ):
             with self.subTest(overrides=overrides), self.assertRaises(ConfigError):
                 load_config(ENV_VALUES | overrides)
@@ -289,6 +294,40 @@ class ConfigTests(unittest.TestCase):
             path.write_bytes(b"")
             with self.assertRaises(ConfigError):
                 load_config(env)
+
+
+class WorkerConfigTests(unittest.TestCase):
+    def test_splits_eps_profile_max_events_and_seed(self):
+        """worker별 몫의 합이 원래 값과 같고, 나머지는 앞 번호부터 1씩 더한다."""
+        env = ENV_VALUES | {"PRODUCER_OUTPUT": "kafka", "PRODUCER_WORKERS": "3", "PRODUCER_EPS": "5500",
+                            "PRODUCER_MAX_EVENTS": "10", "PRODUCER_SEED": "7",
+                            "PRODUCER_LOAD_PROFILE": str(PROFILES / "step.csv")}
+        config = load_config(env)
+        parts = [worker_config(config, i) for i in range(3)]
+        self.assertEqual([p.eps for p in parts], [1834, 1833, 1833])
+        self.assertEqual([p.max_events for p in parts], [4, 3, 3])
+        self.assertEqual([p.seed for p in parts], [7, 8, 9])
+        self.assertEqual({p.workers for p in parts}, {1})
+        for seg_index, segment in enumerate(config.profile.segments):
+            self.assertEqual(sum(p.profile.segments[seg_index].eps for p in parts), segment.eps)
+            self.assertEqual({(p.profile.segments[seg_index].duration_sec, p.profile.segments[seg_index].label)
+                              for p in parts}, {(segment.duration_sec, segment.label)})
+        self.assertEqual([s.eps for s in parts[0].profile.segments], [1667, 2667, 3000, 3334, 3667, 4000])
+
+    def test_unlimited_and_unseeded_stay_so(self):
+        config = load_config(ENV_VALUES | {"PRODUCER_OUTPUT": "kafka", "PRODUCER_WORKERS": "2",
+                                           "PRODUCER_MAX_EVENTS": "0"})
+        part = worker_config(config, 1)
+        self.assertEqual((part.eps, part.max_events, part.seed, part.profile), (2500, None, None, None))
+
+    def test_worker_err_adds_worker_key_to_json_lines(self):
+        buf = io.StringIO()
+        err = _WorkerErr(buf, 2)
+        err.write(json.dumps({"status": "running"}) + "\n")
+        err.write("config error: x\n")
+        lines = buf.getvalue().splitlines()
+        self.assertEqual(json.loads(lines[0]), {"worker": 2, "status": "running"})
+        self.assertEqual(lines[1], "config error: x")
 
 
 class LoadProfileTests(unittest.TestCase):

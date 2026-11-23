@@ -7,6 +7,8 @@ stdout·파일에는 페이로드 + LF만 쓰고, Kafka에는 LF 없이 페이�
 
 import json
 import math
+import multiprocessing
+import os
 import random
 import signal
 import sys
@@ -18,7 +20,7 @@ from typing import BinaryIO, Callable, TextIO
 from confluent_kafka import KafkaException
 
 from log_generator import pools
-from log_generator.config import Config, ConfigError, Segment, load_config
+from log_generator.config import Config, ConfigError, Segment, load_config, worker_config
 from log_generator.generator import EventGenerator
 from log_generator.ops_metrics import ProducerStatsWriter, producer_stats_row
 from log_generator.outputs.file import open_file
@@ -234,14 +236,70 @@ def run(config: Config, out: BinaryIO | None, err: TextIO, kafka: KafkaOutput | 
     return stats, status
 
 
+class _WorkerErr:
+    """worker의 stderr. JSON 한 줄(`{...}`)마다 앞에 worker 번호 키를 붙인다."""
+
+    def __init__(self, err: TextIO, index: int):
+        self.err = err
+        self.prefix = '{"worker": %d, ' % index
+
+    def write(self, text: str) -> int:
+        if text.startswith("{") and not text.startswith("{}"):
+            text = self.prefix + text[1:]
+        return self.err.write(text)
+
+    def flush(self) -> None:
+        self.err.flush()
+
+
+def _worker(config: Config, index: int) -> None:
+    """worker 프로세스 진입점. 나눈 설정으로 단일 실행하고 종료 코드로 끝난다."""
+    sys.stderr = _WorkerErr(sys.stderr, index)
+    sys.exit(_run_single(worker_config(config, index)))
+
+
+def _run_workers(config: Config) -> int:
+    """worker 프로세스 N개를 띄우고 모두 끝날 때까지 기다린다. SIGINT는 모든 worker에 전달한다."""
+    # Kafka 클라이언트·스레드를 부모에서 물려받지 않도록 spawn으로 새 인터프리터를 띄운다.
+    ctx = multiprocessing.get_context("spawn")
+    procs = [ctx.Process(target=_worker, args=(config, i), name=f"log-generator-{i}") for i in range(config.workers)]
+
+    def forward_stop(signum, frame):
+        """종료 요청을 살아 있는 worker에 전달한다. 부모는 계속 기다린다."""
+        for proc in procs:
+            if proc.pid and proc.exitcode is None:
+                os.kill(proc.pid, signal.SIGINT)
+
+    # worker가 spawn 중에 SIGINT를 받아 import 도중 끝나지 않도록, 시작이 끝난 뒤 처리기를 건다.
+    previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        for proc in procs:
+            proc.start()
+        signal.signal(signal.SIGINT, forward_stop)
+        _log(sys.stderr, {"status": "workers_started", "workers": config.workers, "pids": [p.pid for p in procs]})
+        for proc in procs:
+            proc.join()
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
+    codes = [proc.exitcode for proc in procs]
+    _log(sys.stderr, {"status": "workers_finished", "exit_codes": codes})
+    if any(code not in (0, 130) for code in codes):
+        return 1  # 출력 오류(1)와 그 밖의 비정상 종료
+    return 130 if 130 in codes else 0
+
+
 def main() -> int:
-    """출력 대상을 준비하고 SIGINT 종료 요청을 안전한 처리 경계에서 반영한다."""
+    """설정을 읽고 worker 수에 따라 단일 실행 또는 다중 프로세스 실행을 고른다."""
     try:
         config = load_config()
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
+    return _run_workers(config) if config.workers > 1 else _run_single(config)
 
+
+def _run_single(config: Config) -> int:
+    """출력 대상을 준비하고 SIGINT 종료 요청을 안전한 처리 경계에서 반영한다."""
     kafka = writer = None
     if config.output == "kafka":
         out = None

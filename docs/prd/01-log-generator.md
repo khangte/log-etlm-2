@@ -198,6 +198,7 @@
 | `max_events` (`PRODUCER_MAX_EVENTS`) | `300000` | 0 이상 정수. 기본 목표 속도에서 약 60초. `0`은 무제한 |
 | `user_pool_size` (`PRODUCER_USER_POOL_SIZE`) | `500` | 양의 정수. 시작 시 사용자 풀 구성 |
 | `profile` (`PRODUCER_LOAD_PROFILE`) | 빈 값 | 부하 프로파일 CSV 경로. 빈 값이면 `eps` 고정 속도. 형식·검증은 [시간대별 부하 프로파일](06-load-profile.md#생성기-요구사항) |
+| `workers` (`PRODUCER_WORKERS`) | `1` | 양의 정수. 생성 프로세스 수. 2 이상은 `kafka` 출력에서만 허용한다. 규칙은 [다중 프로세스 실행](#다중-프로세스-실행-2026-11-23) |
 | 상품 풀 | `pools.py` 고정 목록 | 임의 크기 확장은 후속 요구사항으로 정의 |
 | `seed` (`PRODUCER_SEED`) | 미지정 | 지정 시 이벤트 유형·상품 등 무작위 선택 재현. UUID와 현재 시각을 포함한 전체 바이트 재현은 보장하지 않음 |
 | 상태 출력 주기 (`PRODUCER_STATUS_INTERVAL_SEC`) | 1초 | 데이터와 분리해 stderr에 JSON 한 줄로 출력. 출력 지연으로 주기가 밀리면 밀린 횟수만큼 몰아서 출력하지 않고 현재 시각부터 다시 센다 |
@@ -213,6 +214,27 @@
 - 출력 지연 시 추가 생성을 늦추고 실제 EPS 하락을 기록한다. 이벤트를 조용히 버리거나 메모리 대기열을 무제한으로 늘리지 않는다.
 - 출력 오류는 stderr에 기록하고 비정상 종료한다. `max_events` 도달 또는 Ctrl+C 시 출력 버퍼를 비우고 최종 통계를 기록한다. 출력 오류로 기록하지 못한 건은 성공 건수에 포함하지 않는다. 단, 출력 완료는 출력 버퍼에 쓴 기준이므로 출력 오류로 종료하면 버퍼에 남아 있던 건(파일 최대 1MB, stdout 약 8KB 분량)이 실제 기록량보다 많게 집계될 수 있다. 정상 완료·Ctrl+C는 버퍼를 비운 뒤 집계하므로 일치한다.
 - 통계에는 목표·실제 EPS, 출력 완료 건수·페이로드 바이트 수, 실제 B/s, 페이로드 평균·최대 크기, 이벤트 유형별 건수, 불량 유형별 건수, 경과 시간과 오류 건수를 포함한다. 출력 완료는 출력 버퍼에 기록한 기준이며 디스크 영속화를 보장하는 의미는 아니다.
+
+### 다중 프로세스 실행 (2026-11-23)
+
+단일 생성기 프로세스는 Python 프로세스 1개의 CPU 한계로 약 10,000 EPS가 최대다([부하 프로파일 현재 기준값](06-load-profile.md#현재-기준값)). 그 이상의 부하는 `PRODUCER_WORKERS`로 프로세스를 나눠 만든다. 이전에는 EPS를 절반으로 한 프로파일 파일(`*-half.csv`)을 생성기 2개로 따로 실행했다.
+
+- `PRODUCER_WORKERS=N`(N ≥ 2)이면 부모 프로세스가 worker 프로세스 N개를 띄우고 모두 끝날 때까지 기다린다. 스레드가 아니라 프로세스로 나눈다(GIL 때문에 스레드로는 CPU 한계를 넘지 못한다). `1`이면 기존과 같이 현재 프로세스에서 실행한다.
+- 각 worker는 같은 설정으로 실행하되, 목표 EPS를 N으로 나눈다. `PRODUCER_EPS`와 프로파일의 구간별 `eps`에 같이 적용한다. 나머지는 앞 번호 worker부터 1씩 더한다(예: 5,500 EPS, N=3 → 1,834·1,833·1,833). 구간 길이·label은 바꾸지 않는다. `PRODUCER_MAX_EVENTS`도 같은 방식으로 나눈다(0은 모든 worker 무제한).
+- 모든 EPS(고정 속도면 `PRODUCER_EPS`, 프로파일이면 모든 구간 `eps`)와 0이 아닌 `PRODUCER_MAX_EVENTS`는 N 이상이어야 한다. worker 하나에 0이 배정되는 설정은 시작 전에 거부한다(종료 코드 2).
+- `PRODUCER_SEED`가 있으면 worker i(0부터)는 `seed + i`를 쓴다. 같은 seed로 같은 이벤트를 중복 생성하지 않게 한다.
+- 2 이상은 `kafka` 출력에서만 허용한다. stdout·file은 여러 프로세스가 한 출력에 쓰게 되어 거부한다(종료 코드 2).
+- 각 worker는 Kafka Producer와 `ops.producer_stats` 기록기를 따로 만들고, `run_id`도 따로 가진다. 판정·분석은 지금처럼 worker `run_id`들의 합계로 한다. Grafana 생성기 패널이 `run_id`를 합산하지 않는 문제([부하 프로파일 2차 측정](06-load-profile.md#상한-확인-프로파일-측정-2차-ceiling-10000-eps-생성기-2개-spark-cpu-4-2026-11-19))는 이번 범위가 아니다.
+- stderr 상태·종료 통계 JSON은 worker마다 기존 형식 그대로 한 줄씩 쓰고 `worker` 키(0부터)를 붙인다. 부모는 시작 시 `{"status": "workers_started", ...}`, 종료 시 worker별 종료 코드를 담은 `{"status": "workers_finished", ...}`를 한 줄씩 쓴다. worker 통계를 합친 요약은 만들지 않는다.
+- 종료 코드: worker 중 하나라도 1(출력 오류)이면 1, 아니면 하나라도 130이면 130, 모두 0이면 0. 비정상 종료(그 밖의 코드·시그널)도 1로 본다. worker 하나가 실패해도 다른 worker를 멈추지 않는다.
+- Ctrl+C(SIGINT)는 부모가 받아 모든 worker에 전달한다. 각 worker는 기존 단일 실행과 같이 flush 후 최종 통계를 쓰고 끝난다.
+
+**검증 (2026-11-23)**
+
+- 단위 테스트: 설정 검증(0 이하, stdout·file에서 2 이상, worker에 0 EPS·0건이 배정되는 값 거부), EPS·구간 eps·최대 건수·seed 분배(`step.csv` × 3 worker의 구간별 합 = 원래 eps), stderr `worker` 키. 생성기 테스트 52개 통과.
+- Kafka 연동(kafka·clickhouse만 기동, Spark 없음): `PRODUCER_WORKERS=2`, `PRODUCER_EPS=2001`, `PRODUCER_MAX_EVENTS=20001`로 실행했다. worker 0/1이 목표 1,001/1,000 EPS로 10,001/10,000건을 보냈고 ACK도 같았다. 종료 코드 0. `ops.producer_stats`에는 run_id 2개가 각각 11행, `generated`·`acked` 합계 10,001/10,000건으로 기록됐다.
+- 종료 처리: 무제한 실행 중 부모에 SIGINT를 보내자 두 worker가 `interrupted`로 끝났고 종료 코드는 130이었다. Kafka가 꺼진 상태에서는 두 worker가 `output_error`로 끝났고 종료 코드는 1이었다.
+- 부하 확인(`step.csv`를 `PRODUCER_WORKERS=2`로 실행해 `step-half.csv` 2개 결과와 비교)은 하지 않았다.
 
 ## 처리지연 측정
 

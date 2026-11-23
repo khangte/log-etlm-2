@@ -125,7 +125,9 @@
 - 키는 다른 `PRODUCER_*` 키처럼 반드시 명시한다. 빈 값을 허용하는 키로 추가한다.
 - 프로파일을 지정하면 `PRODUCER_EPS`는 쓰지 않는다. 키 자체와 값 검증은 기존대로 유지한다.
 - `PRODUCER_MAX_EVENTS`는 프로파일과 함께 적용한다. 프로파일 종료나 최대 건수 도달 중 먼저 오는 쪽에서 종료한다. 프로파일 측정은 `0`(무제한)으로 실행한다.
-- 프로파일 파일 위치: `apps/log_generator/profiles/steady.csv`, `step.csv`, `spike.csv`, `daily.csv`. 2개 프로세스 실행용 파일은 `spike-half.csv`·`step-half.csv`다(2026-11-23). 각각 `spike.csv`·`step.csv`와 구간·길이·label이 같고 EPS만 절반이다(spike 2,500/6,000/2,500, step 2,500/4,000/4,500/5,000/5,500/6,000). 두 프로세스가 같은 파일로 동시에 실행하며, 판정은 원래 프로파일(`spike.csv`·`step.csv`) 구간 경계와 두 `run_id` 합계로 한다.
+- 프로파일 파일 위치: `apps/log_generator/profiles/steady.csv`, `step.csv`, `spike.csv`, `daily.csv`.
+- 2개 이상 프로세스 실행은 원래 프로파일에 `PRODUCER_WORKERS`를 지정한다([로그 생성기 다중 프로세스 실행](01-log-generator.md#다중-프로세스-실행-2026-11-23)). 판정은 프로파일 구간 경계와 worker `run_id`들의 합계로 한다.
+- 이전 방식(2026-11-23 스파이크·step 판정까지): EPS만 절반인 `spike-half.csv`·`step-half.csv`를 생성기 2개로 동시에 실행했다(spike 2,500/6,000/2,500, step 2,500/4,000/4,500/5,000/5,500/6,000). `PRODUCER_WORKERS=2`는 같은 구간·EPS를 만들므로 두 파일은 삭제했다(Git 이력에 남음).
 
 ### 프로파일 파일 형식
 
