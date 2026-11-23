@@ -18,6 +18,13 @@ cg() {  # analyze_profile.py 형식: 첫 줄 시각, 이후 "이름 키 값 ..."
 cd "$ROOT"
 cg > "$OUT/cg_before.txt"
 
+# 1초 cgroup·VM 커널 기록(PRD 03 'daily 동시 정지 원인 조사' 다음 단계 1). 분석은 host_1s_summary.py.
+ARGS=$(for c in kafka spark clickhouse; do echo -n "$c=$(docker inspect -f '{{.Id}}' log-etlm-2-$c-1) "; done)
+docker rm -f host-1s-sampler >/dev/null 2>&1
+docker run -d --name host-1s-sampler --privileged --cgroupns=host --pid=host --cpus 0.5 \
+  -v "$ROOT/docs/measurements/sample_host_1s.sh:/s.sh:ro" -v "$(realpath "$OUT"):/out" \
+  --entrypoint /bin/bash clickhouse/clickhouse-server:26.8.38.9 /s.sh /out/host_1s.txt $ARGS > /dev/null
+
 docker exec log-etlm-2-spark-1 jstat -gc -t 1 1000 | while read -r l; do echo "$(ts) $l"; done > "$OUT/jstat.txt" &
 J=$!
 docker stats --format '{{.Name}} {{.CPUPerc}}' $CS | while read -r l; do
@@ -51,4 +58,5 @@ echo "generator exit $?" >> "$OUT/gen.err"
 sleep 30  # 남은 배치 처리
 cd "$ROOT"; cg > "$OUT/cg_after.txt"
 kill $J $D $S $N $H 2>/dev/null; pkill -f "jstat -gc" ; docker exec log-etlm-2-spark-1 pkill jstat
+docker rm -f host-1s-sampler > /dev/null
 echo done

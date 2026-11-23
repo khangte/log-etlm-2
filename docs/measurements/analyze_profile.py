@@ -224,6 +224,8 @@ def resources(sample_dir: Path, t0: str, segments: list[dict]) -> dict:
     containers = {}
     for line in (sample_dir / "docker_stats.txt").read_text().splitlines():
         ts, name, cpu = line.split()[:3]
+        if cpu == "--":  # docker stats 첫 표본은 값이 없다
+            continue
         seg = label(offset(ts))
         if seg:
             containers.setdefault(f"{name.split('-')[3]}/{seg}", []).append(float(cpu.rstrip("%")) / 100)

@@ -1526,7 +1526,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 - 20-22(7,500 EPS) 구간을 [D1 steady](#d1-적용-steady-검증-2026-11-23) 평시 피크와 비교했다. 트리거 평균은 2,650ms 대 2,633ms로 같고, p99는 4,016ms 대 3,246ms로 나빴다. 이 구간의 3,500ms 초과 배치는 59개 중 3개다.
 - 1차 확인(실행 직후):
   - Kafka GC는 아니다. 실행 중 GC 51회 중 100ms를 넘은 것이 없다.
-  - 샘플러가 기록한 VM 정지(`host_stalls`)도 없다.
+  - VM 정지 기록(`ops.host_stalls`)은 비어 있지만 근거가 되지 않는다. 이 실행에서는 `host-monitor` 서비스가 꺼져 있었다(2026-11-24 확인).
   - 정지 시각의 호스트 상위 프로세스는 생성기(최대 1.2코어)와 Claude Code 정도였다.
   - ClickHouse가 CPU 상한에 걸린 주기 비율은 6.8%(353.7초)로 세 컨테이너 중 가장 높았다. Spark는 4.9%(46.5초), Kafka는 3.7%(42.0초)다.
   - Grafana 조회 서버 시간은 23:35 KST 무렵부터 패턴이 바뀌었다(캡처). 원인은 확인하지 않았다.
@@ -1600,6 +1600,12 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
    - 샘플러 실제 수집 간격
    - 정지 시각 Grafana `query_log`의 CPU·동시성·읽기량
    - 가능하면 정지 순간 task `wchan`, writeback·jbd2 trace도 남긴다. 이것으로 dirty 스로틀과 journal 대기를 구분한다.
+   - 구현(2026-11-24): [sample_host_1s.sh](../measurements/sample_host_1s.sh)를 privileged 1회성 컨테이너(`--cgroupns=host --pid=host`, cgroup2 직접 마운트)에서 1초마다 실행한다. 기록 항목은 다음과 같다.
+     - Kafka·Spark·ClickHouse cgroup의 `io.stat`·`io.pressure`·`cpu.pressure`·`cpu.stat`·`memory.stat`(major fault, swap-in, dirty·writeback 페이지)
+     - VM의 `/proc/vmstat`·`/proc/pressure/*`, `/sys/block/{sdd,sde}/stat`
+     - D 상태(uninterruptible) task의 이름·`wchan`
+     - 모든 값은 누적값이며, `/proc/uptime` 기준 실제 수집 시각을 함께 남긴다. delta·정규화는 [host_1s_summary.py](../measurements/host_1s_summary.py)가 한다. trace(ftrace)는 넣지 않는다.
+   - 측정 전에 `host-monitor`를 켜서 VM 정지 기록이 남는지 확인한다.
 2. 변경 없이 같은 조건으로 기준 실행을 한 번 더 한다.
 3. `ops.producer_stats` 쓰기 증폭만 줄이고 같은 조건으로 비교한다. 방식은 생성기가 1초 행 여러 개를 모아 한 번에 INSERT하는 것을 우선한다. 지금 writer는 `wait_for_async_insert=1` 요청 완료를 기다린 뒤 다음 요청을 보낸다. 그래서 서버 timeout만 늘리면 서버가 합치는 효과가 아니라, 클라이언트 큐에서 기다리는 효과가 된다. Grafana 표시 지연, HTTP timeout, 종료 시 남은 행 처리도 함께 정한다. 1초 해상도를 유지하는 것과 표시 지연을 유지하는 것은 다르다.
 
