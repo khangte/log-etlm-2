@@ -25,6 +25,14 @@ docker run -d --name host-1s-sampler --privileged --cgroupns=host --pid=host --c
   -v "$ROOT/docs/measurements/sample_host_1s.sh:/s.sh:ro" -v "$(realpath "$OUT"):/out" \
   --entrypoint /bin/bash clickhouse/clickhouse-server:26.8.38.9 /s.sh /out/host_1s.txt $ARGS > /dev/null
 
+# 감지기 비교(PRD 03 'daily4 VM 지연 원인 조사'): CPU 제한 없는 컨테이너 감지기와 WSL 셸 감지기.
+docker rm -f tick-probe-nolimit >/dev/null 2>&1
+docker run -d --name tick-probe-nolimit \
+  -v "$ROOT/docs/measurements/tick_gap_probe.sh:/p.sh:ro" -v "$(realpath "$OUT"):/out" \
+  --entrypoint /bin/bash clickhouse/clickhouse-server:26.8.38.9 /p.sh /out/tick_container.txt > /dev/null
+bash "$ROOT/docs/measurements/tick_gap_probe.sh" "$OUT/tick_wsl.txt" &
+P=$!
+
 docker exec log-etlm-2-spark-1 jstat -gc -t 1 1000 | while read -r l; do echo "$(ts) $l"; done > "$OUT/jstat.txt" &
 J=$!
 docker stats --format '{{.Name}} {{.CPUPerc}}' $CS | while read -r l; do
@@ -58,5 +66,6 @@ echo "generator exit $?" >> "$OUT/gen.err"
 sleep 30  # 남은 배치 처리
 cd "$ROOT"; cg > "$OUT/cg_after.txt"
 kill $J $D $S $N $H 2>/dev/null; pkill -f "jstat -gc" ; docker exec log-etlm-2-spark-1 pkill jstat
-docker rm -f host-1s-sampler > /dev/null
+docker rm -f host-1s-sampler tick-probe-nolimit > /dev/null
+kill $P 2>/dev/null
 echo done
