@@ -1,6 +1,6 @@
 # 시간대별 부하 프로파일
 
-- 상태: 완료 (완료 기준 1~8 충족. 2026-11-23 단일 생성기 튜닝 후 평시·지속 용량 충족, 생성기 2개로 [spike 통과](03-stream-processing.md#스파이크-판정-생성기-2개-2026-11-23)·[step 지속 용량 12,000 EPS](03-stream-processing.md#지속-용량-판정-생성기-2개-step-재측정-2026-11-23). 완료 기준 7 `daily.csv` 전체 확인은 2026-11-24 첫 실행에서 [미충족](03-stream-processing.md#daily-전체-확인-2026-11-24)(11개 구간 중 7개 미달)이었다. 원인 조사와 `producer_stats` 묶음 INSERT·`host-monitor` CPU 1.0·Kafka `cpus` 3 조정 뒤 [재실행](03-stream-processing.md#daily-전체-확인-재실행-kafka-cpus-3-2026-11-24)에서 11개 구간 모두 통과했다. 20-22 트리거 p99 3,485ms로 여유가 작고, VM 지연이 없는 실행 1회 근거다. Kafka `cpus` 3 뒤 `spike.csv`·`step.csv`는 다시 측정하지 않았다)
+- 상태: 완료 (완료 기준 1~8 충족. 2026-11-23 단일 생성기 튜닝 후 평시·지속 용량 충족, 생성기 2개로 [spike 통과](03-stream-processing.md#스파이크-판정-생성기-2개-2026-11-23)·[step 지속 용량 12,000 EPS](03-stream-processing.md#지속-용량-판정-생성기-2개-step-재측정-2026-11-23). 완료 기준 7 `daily.csv` 전체 확인은 2026-11-24 첫 실행에서 [미충족](03-stream-processing.md#daily-전체-확인-2026-11-24)(11개 구간 중 7개 미달)이었다. 원인 조사와 `producer_stats` 묶음 INSERT·`host-monitor` CPU 1.0·Kafka `cpus` 3 조정 뒤 [재실행](03-stream-processing.md#daily-전체-확인-재실행-kafka-cpus-3-2026-11-24)에서 11개 구간 모두 통과했다. 20-22 트리거 p99 3,485ms로 여유가 작고, VM 지연이 없는 실행 1회 근거다. Kafka `cpus` 3 뒤 `spike.csv`는 [재판정](03-stream-processing.md#스파이크-재판정-kafka-cpus-3-2026-11-24)에서 통과했다(Spark `memory.peak`가 `mem_limit`의 97.4%). `step.csv`는 다시 측정하지 않았다)
 - 적용 범위: 제품 v1 (6단계 상세 세팅 조정의 부하 모델·튜닝 목표·측정 부하)
 
 ## 목표
