@@ -24,7 +24,7 @@ services:
       KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
     volumes:
       - kafka-data:/var/lib/kafka/data
-    cpus: 3  # 2에서 ACK p95 초과 초가 CPU throttle과 겹쳐 비교 중(PRD 03 'Kafka cpus 3 단독 비교')
+    cpus: 3  # 2에서 ACK p95 초과 초가 CPU throttle과 겹쳤다(PRD 03 'Kafka cpus 3 단독 비교')
     mem_limit: 2g
     healthcheck:
       test: [CMD, /opt/kafka/bin/kafka-topics.sh, --bootstrap-server, kafka:19092, --list]

@@ -11,7 +11,7 @@
 
 정상 주문의 입력 매핑은 [Spark 평탄화 매핑](03-stream-processing.md#정상-주문-평탄화-매핑)을 따른다. 현재 정의는 주문 이벤트 1건당 1행, 이벤트 컬럼 31개와 Kafka 추적 컬럼 4개다. ClickHouse 타입·추가 컬럼은 [컬럼 타입](#order_events-컬럼-타입), 저장 계층은 [저장 계층](#저장-계층), 운영 지표 저장 구조는 [운영 지표 저장](#운영-지표-저장)을 따른다.
 
-자원 예산: [개발환경](00-development-environment.md)의 WSL 메모리 12GB·CPU 8개를 공유한다. 파이프라인 운영·측정 시 Kafka UI는 실행하지 않는다. 이때 Compose 배정은 Kafka CPU 2·2GiB, Spark CPU 3·3GiB이며, 남은 CPU 3개·메모리 약 7GiB를 ClickHouse·Grafana·호스트의 로그 생성기와 WSL 자체가 나눠 쓴다. ClickHouse의 CPU·메모리 제한은 [자원 제한](#자원-제한)을 따르며 지속 적재 중 병합과 `FINAL` 조회의 CPU 경합을 실측한다. Kafka UI는 Compose 프로필 `tools`로 분리해 기본 실행에서 제외한다([Kafka PRD](02-kafka-ingestion.md#kafka-ui)).
+자원 예산: [개발환경](00-development-environment.md)의 WSL 메모리 12GB·CPU 8개를 공유한다. 파이프라인 운영·측정 시 Kafka UI는 실행하지 않는다. 이때 Compose 배정은 Kafka CPU 2·2GiB, Spark CPU 3·3GiB이며(6단계에서 Kafka CPU 3, Spark CPU 4로 변경, 상한 합이 8을 넘는 근거는 [PRD 03 자원 계산](03-stream-processing.md#ack-미달-원인-대조와-자원-계산-2026-11-24)), 남은 CPU 3개·메모리 약 7GiB를 ClickHouse·Grafana·호스트의 로그 생성기와 WSL 자체가 나눠 쓴다. ClickHouse의 CPU·메모리 제한은 [자원 제한](#자원-제한)을 따르며 지속 적재 중 병합과 `FINAL` 조회의 CPU 경합을 실측한다. Kafka UI는 Compose 프로필 `tools`로 분리해 기본 실행에서 제외한다([Kafka PRD](02-kafka-ingestion.md#kafka-ui)).
 
 적재는 [Spark PRD의 역할 구분](03-stream-processing.md#스택별-역할과-적재-방식)에 따라 `foreachBatch` → Spark JDBC writer → ClickHouse 공식 JDBC Driver → ClickHouse 순서로 수행한다. 정상 주문 DataFrame은 append 방식으로 기록한다.
 
