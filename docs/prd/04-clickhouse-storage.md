@@ -428,6 +428,7 @@ B의 제약은 불변 전제 의존이다. 같은 ID에 다른 `event_timestamp`
   - INSERT는 백그라운드로 실행해 루프가 ClickHouse 응답을 기다리느라 다음 틱을 놓치지 않게 한다. 같은 내용을 stdout에도 쓴다. ClickHouse가 같이 멈춰 INSERT가 실패해도 `docker logs host-monitor`로 대조할 수 있다.
   - 이미지는 이미 받아 둔 `clickhouse/clickhouse-server`를 재사용한다. bash, GNU `date`, `clickhouse-client`가 들어 있어 새 이미지가 필요 없다.
   - 계정은 [계정과 권한](#계정과-권한)의 `monitor_writer`를 쓴다.
+  - CPU 상한은 `cpus: 1.0`이다(2026-11-24, 0.25에서 올림). 0.25에서는 감지기 자신이 CFS throttle에 걸려, 제한 없는 감지기에는 없는 지연(3.9·2.2초)과 실제보다 긴 간격(10.6초 대 6.8초)을 기록했다([감지기 비교 실행](03-stream-processing.md#감지기-비교-실행-2026-11-24)). 루프는 스레드 하나라서 1.0이면 사실상 제한에 걸리지 않는다. 평소 사용량은 한 코어의 약 0.4%다. 상한을 아예 없애지 않는 이유가 있다. ClickHouse가 오래 응답하지 않는 동안 멈춤이 연달아 생기면 백그라운드 `clickhouse-client`가 쌓일 수 있는데, 이때도 한 코어로 묶기 위해서다.
 - `ops.host_stalls` 컬럼:
   - `detected_at DateTime64(3, 'UTC')`: 멈춤 뒤 처음 깨어난 시각
   - `gap_ms UInt32`: 직전 틱과의 간격

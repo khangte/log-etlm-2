@@ -57,7 +57,8 @@ N=$!
 H=$!
 
 cd "$ROOT/apps/log_generator"
-PRODUCER_MAX_EVENTS=0 PRODUCER_LOAD_PROFILE="$ROOT/apps/log_generator/profiles/$PROFILE" .venv/bin/log-generator > /dev/null 2> "$OUT/gen.err" &
+case "$PROFILE" in /*) PROFILE_PATH=$PROFILE ;; *) PROFILE_PATH=$ROOT/apps/log_generator/profiles/$PROFILE ;; esac  # 절대 경로면 임시 프로파일
+PRODUCER_MAX_EVENTS=0 PRODUCER_LOAD_PROFILE="$PROFILE_PATH" .venv/bin/log-generator > /dev/null 2> "$OUT/gen.err" &
 G=$!
 (while kill -0 $G 2>/dev/null; do
   [ -r /proc/$G/stat ] && echo "$(ts) $G $(awk '{print $14, $15}' /proc/$G/stat)"; sleep 1; done) > "$OUT/gen_cpu.txt" &

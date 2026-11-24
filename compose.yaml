@@ -126,7 +126,7 @@ services:
     entrypoint: [/bin/bash, /scripts/host-monitor.sh]
     volumes:
       - ./infra/clickhouse/host-monitor.sh:/scripts/host-monitor.sh:ro
-    cpus: 0.25
+    cpus: 1.0  # 0.25에서는 감지기 자신이 throttle에 걸려 거짓 멈춤을 기록했다(PRD 04 '호스트 멈춤 기록')
     mem_limit: 256m
     restart: unless-stopped
 
