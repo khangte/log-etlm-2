@@ -1,6 +1,6 @@
 # 시간대별 부하 프로파일
 
-- 상태: 구현 중 (완료 기준 1~6 완료. 2026-11-23 단일 생성기 튜닝 후 평시·지속 용량 충족, 생성기 2개로 [spike 통과](03-stream-processing.md#스파이크-판정-생성기-2개-2026-11-23)·[step 지속 용량 12,000 EPS](03-stream-processing.md#지속-용량-판정-생성기-2개-step-재측정-2026-11-23). 완료 기준 7 `daily.csv` 전체 확인 2026-11-24 [미충족](03-stream-processing.md#daily-전체-확인-2026-11-24): backlog 0·종단 간 p99 ≤ 10초는 전 구간 충족, 짧은 동시 정지로 11개 구간 중 7개가 ACK·트리거 p99 기준 미달. `producer_stats` 묶음 INSERT 뒤 [재실행](03-stream-processing.md#daily-비교-실행-producer_stats-5초-묶음-2026-11-24)에서 IO 압력 정지가 사라지고 미달 구간이 4개로 줄었다. 그중 2개는 `host-monitor` 틱 지연(최대 6.6초) 구간이다. 10:19 지연은 V3 필터 unload/reload와 시각이 겹치나 인과는 미확정([조사](03-stream-processing.md#daily4-vm-지연-원인-조사-2026-11-24)). [감지기 비교 실행](03-stream-processing.md#감지기-비교-실행-2026-11-24)은 6개 미달이며, 실제 VM 지연(최대 6.8초)과 CPU 제한 감지기의 거짓 지연이 함께 확인됐다. Kafka `cpus` 3 뒤 [30분 임시 프로파일 실행](03-stream-processing.md#kafka-cpus-3-단독-비교-2026-11-24)에서 11개 구간 모두 통과. 60분 `daily.csv` 재확인은 남음)
+- 상태: 완료 (완료 기준 1~8 충족. 2026-11-23 단일 생성기 튜닝 후 평시·지속 용량 충족, 생성기 2개로 [spike 통과](03-stream-processing.md#스파이크-판정-생성기-2개-2026-11-23)·[step 지속 용량 12,000 EPS](03-stream-processing.md#지속-용량-판정-생성기-2개-step-재측정-2026-11-23). 완료 기준 7 `daily.csv` 전체 확인은 2026-11-24 첫 실행에서 [미충족](03-stream-processing.md#daily-전체-확인-2026-11-24)(11개 구간 중 7개 미달)이었다. 원인 조사와 `producer_stats` 묶음 INSERT·`host-monitor` CPU 1.0·Kafka `cpus` 3 조정 뒤 [재실행](03-stream-processing.md#daily-전체-확인-재실행-kafka-cpus-3-2026-11-24)에서 11개 구간 모두 통과했다. 20-22 트리거 p99 3,485ms로 여유가 작고, VM 지연이 없는 실행 1회 근거다. Kafka `cpus` 3 뒤 `spike.csv`·`step.csv`는 다시 측정하지 않았다)
 - 적용 범위: 제품 v1 (6단계 상세 세팅 조정의 부하 모델·튜닝 목표·측정 부하)
 
 ## 목표
@@ -222,9 +222,10 @@ duration_sec,eps,label
 | --- | --- | --- |
 | `spark` | `cpus` 3 → 4 | 측정 기간 CFS 주기의 16.8%에서 CPU 상한에 걸렸다. 대기 시간 합계는 437초다. 호스트는 spike 구간에도 평균 4.7코어, p95 6.4코어만 써서 여유가 있었다. `local[3]`(태스크 3개)은 유지한다. 늘린 1코어는 태스크 밖 driver 스케줄링, JVM GC·JIT, Python worker가 쓴다. |
 | `spark` | `SPARK_MAX_OFFSETS_PER_TRIGGER` 50,000 → 55,000 | [스파이크 측정 3차](#스파이크-프로파일-측정-3차-spike-12000-eps-배치-상한-55000건-2026-11-19)에서 회복 시간이 약 60초에서 약 40~44초로 줄었다. `anon` 최대는 28MiB만 늘었고 `memory.peak`는 93.3%로 2차(95.5%)보다 낮았다. 평상시 배치(약 25,000건)는 상한에 닿지 않아 정상 부하 지연은 같다. 상한 배치 처리 시간이 이미 5초를 넘어(평균 5.1~5.3초) 더 올려도 효과가 작으므로 이 값에서 멈춘다. 이후 Spark 튜닝으로 처리 시간이 줄어 2026-11-23 65,000으로 다시 올렸다([Spark B1](03-stream-processing.md#b1-배치-상한-65000-실험-2026-11-23)). `SPARK_JDBC_BATCH_SIZE`는 50,000을 유지한다([ClickHouse PRD](04-clickhouse-storage.md)). |
+| `kafka` | `cpus` 2 → 3 (2026-11-24) | `daily.csv` 30분 실행에서 ACK p95 100ms 초과 초가 Kafka CPU throttle과 겹쳤다. 3으로 올린 비교 실행에서 throttle 초가 71 → 0, 초과 행이 23 → 1(워밍업)이 됐다([비교](03-stream-processing.md#kafka-cpus-3-단독-비교-2026-11-24)). |
 | `grafana` | `mem_limit` 512m → 1g | 재시작 직후 유휴 상태에서도 461MiB(90%)였다. 캡처 중 상한에 닿아 응답이 멈췄다. OOM kill은 없었고 페이지 캐시 회수로 버텼다. 메인 프로세스 RSS는 419MB다. 쓰지 않는 내장 데이터 소스 백엔드 13개가 약 150MB를 더 쓴다. |
 
-- 예산: CPU 상한 합계는 Kafka 2 + Spark 4 + ClickHouse 2 + Grafana 0.5 + host-monitor 0.25 = 8.75다. WSL CPU는 8개다. 상한은 예약이 아니며 측정 중 실제 사용량은 최대 7.8코어였다. 모든 서비스가 동시에 상한까지 쓰면 호스트의 생성기와 경합한다. 메모리 제한 합계는 2 + 3 + 4 + 1 + 0.25 = 10.25GiB다. 측정 중 호스트 가용 메모리 최솟값은 5.6GB였다.
+- 예산: CPU 상한 합계는 Kafka 2 + Spark 4 + ClickHouse 2 + Grafana 0.5 + host-monitor 0.25 = 8.75다. 2026-11-24 Kafka 3, `host-monitor` 1.0으로 바뀌어 10.5다. 이후 `daily.csv` 실행에서 세 서비스 동시 사용 최대는 6.04코어였다. WSL CPU는 8개다. 상한은 예약이 아니며 측정 중 실제 사용량은 최대 7.8코어였다. 모든 서비스가 동시에 상한까지 쓰면 호스트의 생성기와 경합한다. 메모리 제한 합계는 2 + 3 + 4 + 1 + 0.25 = 10.25GiB다. 측정 중 호스트 가용 메모리 최솟값은 5.6GB였다.
 - 비교한 대안:
   - Spark standalone(master·worker 분리): 단일 호스트에서는 처리량이 늘지 않는다. 같은 CPU를 프로세스 3개가 나누고, executor와 driver 사이 직렬화·네트워크 홉이 생긴다. 병렬도는 Kafka 파티션 3개가 상한이다. 노드를 늘려 수평 확장할 때 다시 검토한다.
   - `local[4]`: 읽기 태스크는 파티션 수 3에서 막힌다. shuffle·JDBC 파티션 3과도 어긋난다.
