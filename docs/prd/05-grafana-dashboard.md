@@ -33,7 +33,7 @@
 루트 `compose.yaml`에 `grafana` 서비스를 추가한다.
 
 - 포트: `127.0.0.1:${GRAFANA_HOST_PORT}:3000`. ClickHouse HTTP와 같이 루프백에만 게시한다.
-- 자원: `cpus` 0.5, `mem_limit` 512m([자원 제한](04-clickhouse-storage.md#자원-제한)). 6단계에서 `mem_limit`을 1g로 올렸다([자원 조정](06-load-profile.md#자원-조정)).
+- 자원: `cpus` 0.5, `mem_limit` 1g([자원 제한](04-clickhouse-storage.md#자원-제한)). 6단계에서 `mem_limit`을 512m에서 1g로 올렸다([자원 조정](06-load-profile.md#자원-조정)).
 - 기동 순서: `clickhouse-init` 성공 후 기동한다. `grafana_reader` 계정이 있어야 데이터 소스 상태 확인이 통과한다.
 - 관리자: `GF_SECURITY_ADMIN_USER`·`GF_SECURITY_ADMIN_PASSWORD`를 `.env`에서 필수 값(`:?`)으로 받는다. 익명 접근과 회원 가입은 끈다.
 - 저장: Grafana 내부 DB(SQLite)는 이름 있는 볼륨 `grafana-data`에 둔다. 대시보드·데이터 소스·경보 규칙의 원본은 저장소의 프로비저닝 파일이며, 볼륨을 지워도 같은 상태로 복원된다.
@@ -116,13 +116,15 @@ infra/grafana/
 | Kafka → Spark | `foreachBatch` 콜백 진입 시각 − Kafka LogAppendTime | 소비 대기 근사치. 트리거 시작부터 콜백 진입까지의 준비 시간 포함. 미래 timestamp·누락은 별도 집계하며 트리거 시작 기준 지연으로 표시하지 않음 |
 | Spark 배치 | `StreamingQueryProgress.durationMs.triggerExecution` | 트리거 전체 소요시간. 출력·체크포인트 등 포함 범위를 명시하며 순수 정제 시간으로 표시하지 않음 |
 | Spark → ClickHouse | 정상 DataFrame의 JDBC write action 호출 직전 → 반환 또는 실패 | 선행 변환·스케줄링·태스크 재시도 등이 포함될 수 있는 출력 action 소요시간 |
+| 생성 → ClickHouse 서버 적재 시각 | `ingested_at - event_timestamp` | 서버 기본값으로 기록한 적재 시각까지의 이벤트별 지연 |
+| Spark 콜백 진입 → ClickHouse 서버 적재 시각 | `ingested_at - spark_processed_at` | 콜백 진입부터 서버 적재 시각까지의 이벤트별 지연 |
 | ClickHouse INSERT | `system.query_log`의 INSERT 쿼리별 `query_duration_ms` | 서버 측 요청별 처리시간. 네트워크·클라이언트 대기는 포함하지 않으며 Spark 측 JDBC write action 시간과 별도 패널로 표시 |
 | Grafana 조회 | `system.query_log`의 `grafana_reader` 쿼리별 `query_duration_ms` | 서버 측 조회 처리시간. 네트워크·렌더링은 포함하지 않음. 화면 반영 지연은 v1에서 측정하지 않음([화면 반영 지연 계측 제외](#화면-반영-지연-계측-제외)) |
 
 - 지연과 함께 Producer ACK EPS·전송 실패·큐 길이, Spark 입력·처리 EPS·정상/제외/DLQ 건수, Kafka 파티션별 backlog, ClickHouse 쓰기 실패·재시도, 데이터 최신성을 표시한다.
 - Kafka backlog는 보관 중인 끝 offset과 Spark 체크포인트의 처리 완료 offset 경계를 기준으로 정의한다. consumer group lag와 동일하다고 가정하지 않는다. offset 차이는 레코드 건수의 근사 지표로 표시하고 실제 입력 건수와 구분한다. 수집 경로는 아래 패널별 데이터 원천의 progress 지표를 따른다.
 - 재시도는 시도별 소요시간과 최종 성공까지의 시간을 구분한다. JDBC write action·INSERT 요청·Spark 배치 시간은 포함 관계가 있으므로 합산하지 않는다.
-- 생성기·Producer·Spark·JDBC·조회 관측 지표는 별도 운영 데이터로 수집한다. 주문 행만으로 모든 지표를 계산한다고 가정하지 않는다. 지표 저장소와 Grafana 데이터 소스는 ClickHouse 하나로 하며, 저장 구조와 지표 손실 정책은 [ClickHouse 운영 지표 저장](04-clickhouse-storage.md#운영-지표-저장)을 따른다. `ops` 테이블과 `silver.order_events`의 보관은 24시간이므로 운영 대시보드 조회 범위도 24시간 이내다.
+- 생성기·Producer·Spark·JDBC·조회 관측 지표는 별도 운영 데이터로 수집한다. 주문 행만으로 모든 지표를 계산한다고 가정하지 않는다. 지표 저장소와 Grafana 데이터 소스는 ClickHouse 하나로 하며, 저장 구조와 지표 손실 정책은 [ClickHouse 운영 지표 저장](04-clickhouse-storage.md#운영-지표-저장)을 따른다. `silver.order_events`와 배치·구간 운영 지표에 24시간 TTL을 적용한다. `ops.host_stalls`의 TTL은 3일이다. 주요 운영 지표의 조회 범위는 24시간 이내다.
 
 ### 패널별 데이터 원천
 
@@ -230,7 +232,7 @@ Grafana 통합 경보(unified alerting)로 아래 규칙을 파일 프로비저�
 | 주문 대시보드 패널 쿼리 서버 시간 p95(15분 범위) | 1초 이하 | 4단계 15분 조회 목표와 같다 |
 | 운영 대시보드 패널 쿼리 서버 시간 p95 | 1초 이하 | 5초 갱신 안에 끝나야 다음 갱신과 겹치지 않는다 |
 | 충돌 점검(1시간) 쿼리 서버 시간 | 2초 이하 | 1분 평가에서 CPU 점유를 평가 주기의 수 % 안으로 둔다 |
-| Grafana 컨테이너 | 측정 동안 OOM·재시작 없음, 메모리 최대치 기록 | 512MiB 제한 확인 |
+| Grafana 컨테이너 | 측정 동안 OOM·재시작 없음, 메모리 최대치 기록 | 현재 1GiB 상한 기준. 5단계 검증 당시에는 512MiB |
 
 기능 확인 항목은 아래와 같다.
 

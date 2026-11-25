@@ -18,7 +18,7 @@
 - Docker Desktop의 WSL2 통합을 이용하고 루트 `compose.yaml`에서 실행한다.
 - 공식 JVM 이미지 `apache/kafka:4.4.0`를 고정한다. 단일 노드가 broker와 controller를 겸하는 KRaft 방식이다.
 - WSL 접속은 `localhost:${KAFKA_HOST_PORT}`, Compose 내부 접속은 `kafka:19092`로 구분한다. 호스트 포트는 기본 예시 9092이며 루프백에만 게시한다.
-- Kafka 컨테이너는 CPU 2개, 메모리 2GiB, JVM heap 512MiB로 시작한다. CPU는 6단계에서 3개로 올렸다([Kafka `cpus` 3 단독 비교](03-stream-processing.md#kafka-cpus-3-단독-비교-2026-11-24)). 토픽 초기화 컨테이너는 메모리 512MiB를 사용한다.
+- Kafka 컨테이너의 현재 상한은 CPU 3개, 메모리 2GiB, JVM heap 512MiB다. CPU는 6단계에서 2개에서 3개로 올렸다([Kafka `cpus` 3 단독 비교](03-stream-processing.md#kafka-cpus-3-단독-비교-2026-11-24)). 토픽 초기화 컨테이너는 메모리 512MiB를 사용한다.
 - named volume에 데이터와 KRaft 메타데이터를 보존한다. 재시작 시 유지하며 명시적 볼륨 삭제로 초기화한다. 볼륨은 이미지에서 `appuser` 소유로 준비된 `/var/lib/kafka/data`에 마운트하고 `KAFKA_LOG_DIRS`도 같은 경로로 지정한다(`/tmp` 하위 경로에 마운트하면 root 소유 볼륨이라 브로커가 쓰기 권한 오류로 기동하지 못한다).
 - healthcheck 성공 후 일회성 초기화 서비스가 토픽을 생성한다. 자동 토픽 생성은 끈다.
 - 애플리케이션 토픽은 원본과 DLQ의 2개다. Kafka 내부 관리 토픽은 별도다. `.env`의 `KAFKA_TOPIC`은 `raw.ecommerce.orders.v1`, 추가할 `KAFKA_DLQ_TOPIC`은 `dlq.ecommerce.orders.v1`로 지정한다. 점은 토픽명의 실제 문자이며 백슬래시는 포함하지 않는다.
@@ -40,7 +40,7 @@
 
 ### Kafka UI
 
-- 루트 `compose.yaml`에 `kafka-ui` 서비스를 추가한다. Kafbat UI의 `ghcr.io/kafbat/kafka-ui` 이미지를 사용하고, 정확한 릴리스 태그는 구현 시 확인해 고정한다. `latest`는 사용하지 않는다.
+- 루트 `compose.yaml`에 `kafka-ui` 서비스를 추가한다. Kafbat UI 이미지는 `ghcr.io/kafbat/kafka-ui:v1.5.0`으로 고정한다.
 - 브로커 healthcheck 성공 후 시작한다. 클러스터 이름은 `local`, `KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:19092`로 내부 리스너에 연결한다.
 - 웹 접속은 `http://localhost:8080`으로 한다. `.env.example`에 `KAFKA_UI_HOST_PORT=8080`을 추가하고, Compose 포트는 `127.0.0.1:${KAFKA_UI_HOST_PORT}:8080`으로 게시한다. 포트 충돌 시 호스트 포트만 변경한다.
 - `mem_limit: 1g`, `cpus: 1`, JVM heap 상한 512MiB로 시작한다. UI의 JVM과 메시지 조회에 여유를 두기 위한 초기 예산이며, 사용량을 측정해 조정한다. Kafka 2GiB와 합쳐 상주 컨테이너 메모리 제한 합계는 3GiB이고, 초기화 실행 중에는 최대 512MiB의 제한 예산이 추가된다. 실제 메모리를 전부 미리 예약하는 것은 아니다.
@@ -89,7 +89,7 @@
 - 두 토픽 보관 크기 기준 합계는 36GiB다. 세그먼트·인덱스·내부 토픽 등의 여유를 고려해 Kafka 데이터용 디스크 여유 공간은 최소 50GiB를 권장한다. 이는 여유 공간 확인 기준이며 볼륨 quota는 아니다. Docker Desktop의 WSL 가상 디스크는 데이터·볼륨을 삭제해도 자동으로 줄지 않으므로 Windows 측 디스크 여유도 함께 확인한다.
 - 압축 이득은 계산에 포함하지 않는다. 실제 평균 크기·압축률·불량률·파티션 편중에 따라 보관 가능 시간이 달라진다. 30%는 초기 예산 여유이며 최악의 경우를 보장하는 상한이 아니다.
 - 필요 파티션 수는 목표 EPS를 파티션당 지속 처리 가능한 실측 EPS로 나눠 올림한 값을 참고하되 소비 병렬도와 편중도 함께 확인한다. 현재 파티션당 실측 처리량이 없어 3/1을 최적값으로 확정하지 않는다.
-- Kafka는 `mem_limit: 2g`, heap 512MiB, CPU 2개를 유지한다(CPU는 6단계에서 3개로 변경). 보관 데이터는 디스크에 저장하며 토픽 수나 보관 용량에 비례해 heap을 늘리지 않는다. 메모리 부족·GC·CPU 제한과 지연의 관계를 측정해 조정한다.
+- 현재 Kafka 설정은 `mem_limit: 2g`, heap 512MiB, CPU 3개다. 보관 데이터는 디스크에 저장하며 토픽 수나 보관 용량에 비례해 heap을 늘리지 않는다. 메모리 부족·GC·CPU 제한과 지연의 관계를 측정해 조정한다.
 - Kafka 스왑 차단(`memswap_limit: 2g`)은 적용하지 않는다(2026-11-23 검토 후 되돌림). 스왑에 나간 heap을 GC가 다시 읽어 브로커가 약 1.8초 멈춘 사례는 있었다([Spark PRD spike4](03-stream-processing.md#스파이크-재실행-대시보드-닫음-swap-in-기록-2026-11-23)). 하지만 Kafka 한도 회수만으로는 heap이 스왑에 들어가지 않아 그 조건을 재현하지 못했다([A/B 재현 A](03-stream-processing.md#kafka-스왑-ab-재현-a스왑-허용-2026-11-23)). 효과 근거가 부족하므로 Compose 기본값(스왑 = `mem_limit`만큼 허용)을 유지한다. VM 전체 메모리 압력에서 Kafka 스왑과 정지가 다시 관찰되면 다시 검토한다.
 
 ### DLQ 및 offset 관리

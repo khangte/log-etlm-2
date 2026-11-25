@@ -234,22 +234,24 @@ Spark는 단일 컨테이너의 local 모드로 실행한다. 아래 값은 PRD 
 ### 계산 전제
 
 - 입력: 전체 5,000 EPS, 평균 793B, 약 3.97MB/s. 원본 토픽 파티션 3개. 정상 주문 4,250건/s.
-- 자원: [개발환경](00-development-environment.md)의 WSL 메모리 12GB·CPU 8개. Kafka 2GiB·CPU 2개, Kafka UI 1GiB·CPU 1개가 이미 배정되어 있다.
+- 자원: [개발환경](00-development-environment.md)의 WSL 메모리 12GB·CPU 8개. Kafka 상한은 2GiB·CPU 3개다. 운영·측정 시 Kafka UI를 제외한다. 전체 자원 상한은 [ClickHouse PRD의 자원 제한](04-clickhouse-storage.md#자원-제한)을 따른다.
 - 반영 지연: [대시보드 조회 조합 비교](04-clickhouse-storage.md#중복-제거조회-조합-비교) 기준으로 대시보드 갱신 대기 60초가 가장 큰 항이다.
 
 ### 환경변수와 초기값
 
-| 환경변수 | 초기값 | 근거 |
+표의 값은 현재 설정이며, 초기값은 변경 이력에 표시한다.
+
+| 환경변수 | 현재 값 | 근거 |
 | --- | --- | --- |
 | `SPARK_MASTER` | `local[3]` | 원본 파티션 3개와 태스크를 1:1로 맞춘다. 늘려도 Kafka 읽기 병렬도는 파티션 수 3에서 막힌다. |
-| `SPARK_DRIVER_MEMORY` | `2g` → `1536m` (6단계) | local 모드에서는 driver heap이 실행 메모리 전체다. 배치 최대 원문 39.7MB(50,000 × 793B)를 파싱·컬럼 전개로 10배 잡아도 약 400MB다. 6단계 측정에서 살아 있는 데이터는 250~560MB였고, 2g에서는 힙 commit이 1.7GB까지 늘어 컨테이너가 3g에 닿았다. 1536m으로 줄여 부하 중 메모리 최대가 약 420MB 줄었다([JVM 튜닝 결과](#jvm-튜닝-결과-2026-11-20)). |
-| 컨테이너 `mem_limit` / `cpus` | `3g` / `3` (6단계에서 `cpus` 4) | heap 2g에 JVM 비heap·네이티브 약 1g를 더한다. Kafka 2 + UI 1 + Spark 3 = 6GiB이며 ClickHouse·Grafana·개발 도구에 약 6GB가 남는다. `cpus`는 스파이크 측정에서 상한에 걸린 주기가 16.8%라서 6단계에서 4로 올렸다([자원 조정](06-load-profile.md#자원-조정)). |
+| `SPARK_DRIVER_MEMORY` | `1536m` (초기 `2g`) | local 모드에서는 driver heap이 실행 메모리 전체다. 평균 원문 크기 793B를 현재 입력 상한 65,000건에 적용하면 약 51.5MB다. 파싱·컬럼 전개 후 메모리 사용량은 아래 6단계 실측을 따른다. 6단계 측정에서 살아 있는 데이터는 250~560MB였고, 2g에서는 힙 commit이 1.7GB까지 늘어 컨테이너가 3g에 닿았다. 1536m으로 줄여 부하 중 메모리 최대가 약 420MB 줄었다([JVM 튜닝 결과](#jvm-튜닝-결과-2026-11-20)). |
+| 컨테이너 `mem_limit` / `cpus` | `3g` / `4` (초기 `cpus` 3) | 3GiB 상한에는 JVM 힙·비힙과 Python 워커 등의 메모리가 포함된다. `cpus`는 스파이크 측정에서 상한에 걸린 주기가 16.8%라서 6단계에서 4로 올렸다([자원 조정](06-load-profile.md#자원-조정)). |
 | 컨테이너 `MALLOC_ARENA_MAX` (6단계 추가) | `2` (Compose 고정) | glibc malloc arena 상한. 기본값(코어 8 × 8 = 64개)에서는 arena가 해제 메모리를 쥐어 JVM 힙 밖 RSS가 약 0.4GB 늘었다. Python 워커에도 적용된다. 근거는 [메모리 분해](#메모리-분해-2026-11-20)다. |
 | `SPARK_TRIGGER_INTERVAL` | `5 seconds` | 배치당 약 25,000건(19.8MB). 반영 지연에 최대 5초를 더하며 60초 갱신 대기보다 작다. |
 | `SPARK_MAX_OFFSETS_PER_TRIGGER` | `65000` | 2026-11-23 55,000에서 올렸다([B1](#b1-배치-상한-65000-실험-2026-11-23)). 수용 상한은 13,000 EPS다. 2026-11-19 50,000에서 55,000으로 올렸다. 근거는 [부하 프로파일 자원 조정](06-load-profile.md#자원-조정)이다. 처음 값 50,000은 평상시 예상 25,000건의 2배였다. 5초 내 처리 시에만 최대 10,000 EPS에 해당하며 처리속도를 보장하지 않는다. 첫 지속 부하 실측에서는 약 50,000건 처리에 평균 16.05초가 걸렸고, 2단 검증 적용 후 재측정에서는 배치당 약 25,000건을 평균 2.04초에 처리했다. |
 | `SPARK_SHUFFLE_PARTITIONS` | `3` | `local[3]` 태스크 슬롯 수와 같게 두어 셔플 후 태스크가 한 번에 모두 실행된다. 슬롯보다 많으면 태스크가 여러 차례로 나뉘어 실행될 뿐 병렬도는 늘지 않고, 배치당 Parquet 파일 수만 늘어난다. 4단계 `SPARK_JDBC_NUM_PARTITIONS`와 같은 값이다. 체크포인트에 기록되므로 변경하려면 체크포인트를 새로 만든다. |
 | `SPARK_JDBC_BATCH_SIZE` (4단계 추가) | `50000` | 가장 큰 쓰기 파티션 행 수 이상이면 쓰기 파티션당 INSERT 1회다. `maxOffsetsPerTrigger`와 같을 필요는 없다. 근거는 [ClickHouse PRD](04-clickhouse-storage.md)다. |
-| `SPARK_JDBC_NUM_PARTITIONS` (4단계 추가) | `3` | ClickHouse 동시 연결 3개. 배치당 part 3개, 약 0.6 part/s다. |
+| `SPARK_JDBC_NUM_PARTITIONS` (4단계 추가) | `3` | ClickHouse 동시 연결 상한 3개. 평시 각 쓰기 파티션이 한 번씩 전송하면 배치당 INSERT 3회다. 실제 part 수는 INSERT에 포함된 시간 파티션에 따라 달라진다. |
 | `SPARK_CHECKPOINT_DIR` | `/opt/spark/checkpoints/orders` | 볼륨에 마운트한다. Git에서 제외한다. |
 | `SPARK_OUTPUT_DIR` (4단계 제거) | - | 3단계 정상 주문 검증용 Parquet 경로였다. 4단계 JDBC writer 교체와 함께 제거했다. |
 | `SPARK_CLICKHOUSE_JDBC_URL` (4단계 추가) | `jdbc:clickhouse:http://clickhouse:8123?clickhouse_setting_async_insert=0` | 동기 INSERT를 서버 설정으로 명시한다. 근거는 [JDBC 쓰기 설정](04-clickhouse-storage.md#jdbc-쓰기-설정). |

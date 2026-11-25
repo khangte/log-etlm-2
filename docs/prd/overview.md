@@ -20,7 +20,7 @@
 
 - 처리량: 생성기 평균 4,954 EPS, 생성 = ACK = 적재 대상 건수 대조는 각 단계 측정을 따른다.
 - 시작 후 2분은 워밍업으로 제외했다. 음수 지연은 0건이다.
-- `ingested_at`은 ClickHouse 서버의 INSERT 시각이며 조회 가능 시각보다 조금 이르다. 생성기와 ClickHouse는 같은 WSL2 VM 커널 시계를 쓴다.
+- `ingested_at`은 ClickHouse 서버 기본값으로 기록한 적재 시각이다. 최초 조회 가능 시점은 v1 측정 범위에서 제외한다. 생성기와 ClickHouse는 같은 WSL2 VM 커널 시계를 쓴다.
 - 최대 9.87초로 여유가 작다. 트리거 5초 주기와 Kafka → 콜백 대기가 대부분이다. 여유 확보는 6단계 상세 세팅 조정 후보다.
 - VM 정지 구간은 로컬 환경 요인([진단](../measurements/2026-11-19-spark-latency-spike-diagnosis.md))이라 판정에서 제외한다.
 
@@ -107,89 +107,24 @@ v1은 주문 완료 단일 분석 이벤트 도메인이다. health_check는 필
   - **Grafana**는 초단위 자동 갱신과 시계열 데이터 렌더링에 최적화되어 있으며, ClickHouse 공식 플러그인 연동은 물론 특정 지표 급감·급증 시 즉각 대응할 수 있는 **실시간 알람(Alerting) 기능**까지 단일 도구로 통합할 수 있어 선택했습니다.
 
 
-## 예정 폴더 구조
+## 주요 폴더 구조
 
-앱은 `log_generator`, `streaming`으로 구분한다. 현재는 로그 생성기만 구현하며 streaming은 디렉터리 자리만 확보한다. 환경변수 접두사 `PRODUCER_`는 기존 실행 설정과의 호환을 위해 유지한다.
-
-
-```
+```text
 log-etlm-2/
-├── README.md
-├── AGENTS.md
-├── .gitignore
 ├── .env.example
 ├── compose.yaml
-│
 ├── apps/
-│   ├── log_generator/                 # 합성 로그 생성 및 전송
-│   │   ├── pyproject.toml
-│   │   ├── uv.lock
-│   │   ├── .python-version
-│   │   ├── src/log_generator/
-│   │   │   ├── __init__.py
-│   │   │   ├── main.py
-│   │   │   ├── config.py
-│   │   │   ├── generator.py
-│   │   │   ├── pools.py
-│   │   │   └── outputs/
-│   │   │       ├── __init__.py
-│   │   │       ├── file.py             # stdout은 main.py에서 연결
-│   │   │       ├── kafka_producer.py   # 2단계에서 추가
-│   │   │       └── http.py             # FastAPI 도입 시 추가
-│   │   └── tests/
-│   │
-│   └── streaming/                     # 3단계에서 구현
-│       └── src/streaming/
-│           ├── main.py
-│           ├── config.py
-│           ├── source.py
-│           ├── schemas.py
-│           ├── transforms.py
-│           └── sink.py
-│
+│   ├── log_generator/        # 합성 로그 생성·Kafka 전송 및 부하 프로파일
+│   └── streaming/            # Spark 이미지·이벤트 검증·DLQ·JDBC 적재
 ├── contracts/
-│   └── events/
-│       ├── order_completed.v1.schema.json
-│       └── examples/
-│           └── order_completed.v1.json
-│
+│   ├── schemas/
+│   └── samples/
 ├── infra/
-│   ├── kafka/
-│   │   └── init-topics.sh
-│   ├── spark/
-│   │   └── spark-defaults.conf
-│   ├── clickhouse/
-│   │   └── config.xml
-│   └── grafana/
-│       ├── provisioning/
-│       │   ├── datasources/
-│       │   └── dashboards/
-│       └── dashboards/
-│
-├── sql/
-│   └── clickhouse/
-│       ├── migrations/
-│       │   └── 001_create_events.sql
-│       └── queries/
-│           └── event_latency.sql
-│
-├── scripts/
-│   ├── submit-streaming.sh
-│   └── smoke-test.sh
-│
-├── tests/
-│   ├── integration/
-│   └── load/
-│
-├── docs/
-│   ├── prd/
-│   ├── architecture.md
-│   ├── decisions/
-│   └── runbooks/
-│       ├── local-development.md
-│       └── replay.md
-│
-└── .github/
-    └── workflows/
-        └── ci.yml
+│   ├── kafka/                # 토픽 초기화
+│   ├── clickhouse/           # 스키마·권한·서버 설정·호스트 감지
+│   └── grafana/              # 대시보드·데이터 소스·경보 프로비저닝
+└── docs/
+    ├── prd/
+    ├── measurements/
+    └── runbooks/
 ```

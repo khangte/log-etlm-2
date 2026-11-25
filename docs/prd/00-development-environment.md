@@ -1,6 +1,6 @@
 # 개발환경
 
-- 상태: 완료 (환경 검증 결과 기록, swap 입출력은 미측정)
+- 상태: 완료 (환경 검증 결과 기록. 초기 환경 검증 이후 Kafka swap 입출력을 별도 관측)
 - 적용 범위: 제품 v1
 - 환경 구성 기준은 합의되었으며, 실제 설치 및 실행 검증은 단계별로 진행한다.
 
@@ -43,7 +43,7 @@ swap=4GB
 
 ## Python 및 의존성 관리
 
-- Producer는 Python 3.12 계열을 사용하고, 정확한 패치 버전은 구현 착수 시 고정한다.
+- Producer의 Python 버전은 `apps/log_generator/.python-version`에서 3.12 계열로 지정한다.
 - uv로 Python 버전, 가상환경과 의존성을 관리한다.
 - 앱별 `pyproject.toml`, `uv.lock`, `.python-version`을 Git에 포함한다.
 - 앱별 `.venv/`는 Git에서 제외한다.
@@ -95,5 +95,5 @@ apps/log_generator/
 - 구동: Kafka·Kafka UI·Spark·ClickHouse·Grafana를 함께 띄운 상태에서 5,000 EPS 17분(5단계)·60분(진단) 실행이 끝까지 동작했다. 앱 환경은 각 단계에서 `uv sync`로 재현했다.
 - 목표 성능: [4단계 완료 기준](04-clickhouse-storage.md#완료-기준)을 통과했다. 종단 간 지연은 [개요](overview.md#v1-목표-판정-2026-11-19)를 따른다.
 - 메모리: 60분 실행 직후 WSL 사용 7,637MiB/11,963MiB(가용 4,326MiB), Spark 컨테이너 최대 약 2.34GiB/3GiB였다. OOM은 없었다.
-- swap 입출력: 측정하지 않았다.
+- swap 입출력: 이 실행에서는 측정하지 않았다. 11월 23일 후속 스파이크에서는 Kafka cgroup의 swap 입출력을 관측했다. [후속 측정](03-stream-processing.md#스파이크-재실행-대시보드-닫음-swap-in-기록-2026-11-23)
 - 로컬 환경 요인: WSL2 VM 전체 정지(60분에 1~2회, 약 15초)가 관측됐다([진단](../measurements/2026-11-19-spark-latency-spike-diagnosis.md)). Windows 쪽 원인은 확인하지 않았으며, 로컬 측정에서 지연이 튈 때는 생성기 상태 로그 공백으로 VM 정지 여부부터 가린다.

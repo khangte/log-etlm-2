@@ -187,14 +187,14 @@
 - `config.py`: 프로젝트 루트 `.env`와 `PRODUCER_*` 환경변수를 읽어 타입 변환·검증을 적용한 `Config`를 만든다. 코드에는 환경변수 기본값을 두지 않는다.
 - `generator.py`: 정상 주문·health_check·불량 주문을 직렬화된 `bytes`로 생성한다. 불량 유형별 강제 생성 경로(`invalid_order`)를 둔다.
 - `outputs/file.py`: 기존 파일을 덮어쓰지 않는 파일 출력 연결을 담당한다.
-- `main.py`: 실행 진입점(`uv run log-generator`). 속도 제어, stdout·file 출력, 통계를 담당한다. Kafka 전송 모드는 2단계에서 추가한다.
+- `main.py`: 실행 진입점(`uv run log-generator`). 속도 제어, stdout·파일·Kafka 출력, 통계를 담당한다.
 - 종료 코드: 0 정상 완료, 1 출력 오류, 2 설정 오류, 130 Ctrl+C.
 - 속도 제어: 5ms 틱마다 누적 목표 대비 부족분만 출력한다. 한 틱 허용량의 2배를 넘게 밀리면 밀린 분량을 포기하고 기준 시각을 당긴다. 목표 EPS 유지는 단위 테스트(1,000 EPS로 500건 출력 시 경과 0.45~0.6초)로 검증한다. 부하 프로파일 실행 시 구간 전환마다 누적 기준을 다시 잡는다([시간대별 부하 프로파일](06-load-profile.md#속도-제어)).
 
 | 설정 | `.env.example` 예시값 | 규칙 |
 | --- | --- | --- |
 | `eps` (`PRODUCER_EPS`) | `5000` | 양의 정수, 생성부터 출력까지 완료한 전체 로그 기준 |
-| `output` (`PRODUCER_OUTPUT`, `PRODUCER_OUTPUT_PATH`) | `stdout` | `stdout`, `file` 중 선택. `file`은 경로 필수 |
+| `output` (`PRODUCER_OUTPUT`, `PRODUCER_OUTPUT_PATH`) | `stdout` | `stdout`, `file`, `kafka` 중 선택. `file`은 경로 필수 |
 | `max_events` (`PRODUCER_MAX_EVENTS`) | `300000` | 0 이상 정수. 기본 목표 속도에서 약 60초. `0`은 무제한 |
 | `user_pool_size` (`PRODUCER_USER_POOL_SIZE`) | `500` | 양의 정수. 시작 시 사용자 풀 구성 |
 | `profile` (`PRODUCER_LOAD_PROFILE`) | 빈 값 | 부하 프로파일 CSV 경로. 빈 값이면 `eps` 고정 속도. 형식·검증은 [시간대별 부하 프로파일](06-load-profile.md#생성기-요구사항) |
@@ -205,8 +205,8 @@
 
 - 기본 실행 `uv run log-generator`에서 `python-dotenv`로 프로젝트 루트 `.env`를 자동으로 읽는다. 실행 디렉터리와 무관하게 소스 위치 기준으로 루트를 찾는다. 설정 우선순위는 이미 설정된 환경변수 > `.env`이며 코드 기본값은 없다. `.env.example`은 템플릿일 뿐 실행 시 읽지 않는다. `.env`가 없으면 환경변수만 사용한다(컨테이너는 Compose가 주입). 소스 위치가 얕아 루트를 계산할 수 없는 설치 경로(예: 컨테이너 `/app/src/log_generator`)에서도 import가 실패하지 않고 환경변수만 사용한다.
 - 모든 `PRODUCER_*` 설정 키를 명시해야 한다. 누락 시 시작 전에 설정 오류(종료 코드 2)로 종료한다. EPS·출력 대상·최대 건수·사용자 풀 크기·상태 주기는 빈 값도 거부한다.
-- `PRODUCER_SEED=`는 무작위 seed 미지정을 명시한다. `PRODUCER_OUTPUT_PATH=`는 stdout 모드에서만 허용하며 file 모드에서는 경로가 필수다. 이 두 키도 생략할 수 없다.
-- 두 설정 파일이 모두 없어도 필요한 모든 키를 환경변수로 제공하면 실행할 수 있다. 별도 CLI 옵션·YAML 로더·Kafka 라이브러리는 이번 단계에서 추가하지 않는다.
+- `PRODUCER_SEED=`는 무작위 seed 미지정을 명시한다. `PRODUCER_OUTPUT_PATH=`는 stdout·Kafka 모드에서 허용하며 file 모드에서는 경로가 필수다. 이 두 키도 생략할 수 없다.
+- 두 설정 파일이 모두 없어도 필요한 모든 키를 환경변수로 제공하면 실행할 수 있다. Kafka 출력 설정은 [Kafka PRD](02-kafka-ingestion.md#producer-연동-설정)를 따른다.
 - `PRODUCER_MAX_EVENTS=0`은 무제한 실행이다. 값의 형식·범위 오류는 생성 전에 거부한다(종료 코드 2).
 - stdout·파일에는 직렬화된 페이로드와 LF만 출력한다. 불량 JSON도 한 줄씩 기록하므로 파일의 모든 줄이 유효한 JSON이라고 가정하지 않는다.
 - 파일은 명시된 경로에 새로 생성한다. 기존 파일이 있으면 덮어쓰지 않고 오류로 종료한다. 자동 회전·압축은 이번 단계에서 제외한다.
@@ -217,7 +217,7 @@
 
 ### 다중 프로세스 실행 (2026-11-23)
 
-단일 생성기 프로세스는 Python 프로세스 1개의 CPU 한계로 약 10,000 EPS가 최대다([부하 프로파일 현재 기준값](06-load-profile.md#현재-기준값)). 그 이상의 부하는 `PRODUCER_WORKERS`로 프로세스를 나눠 만든다. 이전에는 EPS를 절반으로 한 프로파일 파일(`*-half.csv`)을 생성기 2개로 따로 실행했다.
+단일 생성기 프로세스는 Python 프로세스 1개의 CPU 한계로 약 10,000 EPS가 최대다([부하 프로파일 초기 기준값](06-load-profile.md#초기-기준값)). 그 이상의 부하는 `PRODUCER_WORKERS`로 프로세스를 나눠 만든다. 이전에는 EPS를 절반으로 한 프로파일 파일(`*-half.csv`)을 생성기 2개로 따로 실행했다.
 
 - `PRODUCER_WORKERS=N`(N ≥ 2)이면 부모 프로세스가 worker 프로세스 N개를 띄우고 모두 끝날 때까지 기다린다. 스레드가 아니라 프로세스로 나눈다(GIL 때문에 스레드로는 CPU 한계를 넘지 못한다). `1`이면 기존과 같이 현재 프로세스에서 실행한다.
 - 각 worker는 같은 설정으로 실행하되, 목표 EPS를 N으로 나눈다. `PRODUCER_EPS`와 프로파일의 구간별 `eps`에 같이 적용한다. 나머지는 앞 번호 worker부터 1씩 더한다(예: 5,500 EPS, N=3 → 1,834·1,833·1,833). 구간 길이·label은 바꾸지 않는다. `PRODUCER_MAX_EVENTS`도 같은 방식으로 나눈다(0은 모든 worker 무제한).
@@ -276,7 +276,7 @@
 - 기존 `event_timestamp`는 이벤트 생성 시점이며 종단 간 지연의 기준이다. 생성·직렬화 시간은 별도 단조 증가 시계로 측정한다.
 - 이벤트별 측정값을 stdout 페이로드에 섞지 않고 상태 지표로 집계한다. flush 소요시간은 개별 쓰기와 분리한다.
 - Kafka 전송 측정은 [Kafka PRD](02-kafka-ingestion.md)에 따른다.
-- 4단계부터 Kafka 출력 모드의 생성·직렬화 시간과 Producer 지표를 1초 구간 통계로 ClickHouse `ops.producer_stats`에 기록한다. 방식과 실패 정책은 [ClickHouse 운영 지표 저장](04-clickhouse-storage.md#운영-지표-저장)을 따른다.
+- 4단계부터 Kafka 출력 모드의 생성·직렬화 시간과 Producer 지표를 1초 구간 통계로 집계해 ClickHouse `ops.producer_stats`에 기록한다. 11월 24일부터 1초 행을 최대 5초 모아 한 번에 전송하며, 종료 시 남은 행을 전송한다. 방식과 실패 정책은 [ClickHouse 운영 지표 저장](04-clickhouse-storage.md#운영-지표-저장)을 따른다.
 
 ## 측정 오버헤드 축소 (2026-11-19)
 
