@@ -47,7 +47,7 @@ Grafana → ClickHouse 조회 → 대시보드 표시
 - 정상 적재와 DLQ 기록은 원자적으로 완료되지 않는다. 어느 한쪽이라도 실패하면 예외를 숨기지 않고 쿼리를 실패시키며, 복구 후 같은 체크포인트로 재시작한다. 이미 성공한 출력의 중복 처리도 필요하다.
 - 실패는 빨리 드러내고 재시작은 외부 관리자가 맡는다(4단계 추가). 앱은 스스로 재시도·재시작하지 않는다. 구현·검증: [멈춤 감시·자동 재시작 검증](04-clickhouse-storage.md#멈춤-감시자동-재시작-검증-2026-11-18).
   - 멈춤 감시: 실패가 예외로 끝나지 않고 멈추는 경우가 있다([4단계 DLQ 쓰기 실패 주입](04-clickhouse-storage.md#dlq-쓰기-실패-주입-결과-2026-11-18)에서 producer 네트워크 스레드가 죽어 `flush`가 무기한 대기). 배치가 멈추면 진행 이벤트도 오지 않으므로 리스너만으로는 알 수 없다. Driver 감시 스레드가 마지막 진행·유휴 이벤트 시각을 보고, `SPARK_STALL_TIMEOUT_SECONDS` 동안 없으면 로그를 남기고 프로세스를 exit 1로 끝낸다. 멈춘 태스크는 정상 종료(`query.stop()`)도 끝나지 않을 수 있어 바로 종료한다.
-  - 자동 재시작: Compose `restart: on-failure`(횟수 상한 없음)가 같은 체크포인트로 다시 띄운다. 예외로 끝난 실패(exit 1)도 같이 재시작된다. 상한을 두지 않는 이유: Docker의 `on-failure:N` 횟수는 컨테이너 수명 동안 누적되고 정상 가동 뒤에도 초기화되지 않아, 무관한 장애가 쌓이면 Spark가 영구 정지한다. 지속 실패(독 배치, 보존 기간 지난 Kafka offset 등)는 재시작 간격 최대 1분(100ms에서 두 배씩 증가, 10초 이상 가동하면 초기화)으로 계속 반복되므로, 반복 실패 감지는 `RestartCount` 증가 경보(5단계 Grafana)로 한다.
+  - 자동 재시작: Compose `restart: on-failure`(횟수 상한 없음)가 같은 체크포인트로 다시 띄운다. 예외로 끝난 실패(exit 1)도 같이 재시작된다. 상한을 두지 않는 이유: Docker의 `on-failure:N` 횟수는 컨테이너 수명 동안 누적되고 정상 가동 뒤에도 초기화되지 않아, 무관한 장애가 쌓이면 Spark가 영구 정지한다. 지속 실패(독 배치, 보존 기간 지난 Kafka offset 등)는 재시작 간격 최대 1분(100ms에서 두 배씩 증가, 10초 이상 가동하면 초기화)으로 계속 반복되므로, 같은 체크포인트에서 쿼리가 재시작하면 [Grafana Spark 재시작 경보](05-grafana-dashboard.md#경보)가 최근 15분 동안 같은 `query_id`의 서로 다른 `run_id` 2개 이상을 감지한다.
   - DLQ 전송 타임아웃: DLQ producer는 `delivery.timeout.ms` 30초·`request.timeout.ms` 15초로 둔다(기본 120초·30초). 전송 실패가 30초 안에 예외로 드러나 시도 행(`dlq_write_action`)이 남는다. 네트워크 스레드가 죽은 경우는 타임아웃이 동작하지 않으므로 멈춤 감시가 필요하다.
   - 비교한 대안: DLQ 쓰기를 앱 안 재시도로 감싸기(실패를 숨김), 사람이 재시작(4단계 관찰에서 3.8분간 감지 못 함), DLQ 실패를 무시하고 배치 성공 처리(유실).
 - 적재 방식은 Spark의 범용 JDBC writer와 ClickHouse JDBC Driver 조합으로 고정한다. Spark·Java·JDBC Driver 버전과 타입 매핑은 구현 전에 호환성을 확인해 고정한다.
@@ -833,7 +833,7 @@ docker compose stop spark                                      # 정지. 체크�
 
 1. 분류 결과가 같다. `outcome`과 `error_*` 필드가 기존 구현과 같아야 한다(단위 테스트, pickle·Arrow 대조 테스트).
 2. 벤치 운영 경로(쓰기 제외) 중앙값이 기준보다 5% 이상 짧다. 기준과 후보는 같은 컨테이너에서 번갈아 실행한다.
-3. 채택한 변경을 모두 적용한 뒤 `steady.csv`·`step.csv`를 실행해 [튜닝 목표](06-load-profile.md#튜닝-목표)로 판정한다: 평시 피크 트리거 p99 ≤ 3,500ms, 10,000 EPS 단계 통과, 종단 간 지연 p99 ≤ 10초, 공통 기준 충족.
+3. 채택한 변경을 모두 적용한 뒤 `steady.csv`·`step.csv`를 실행해 [튜닝 목표](06-load-profile.md#튜닝-목표)로 판정한다: 평시 피크 트리거 p99 ≤ 3,500ms, 10,000 EPS 단계 통과, E2E 지연 p99 ≤ 10초, 공통 기준 충족.
 4. Spark 메모리 최대치가 `mem_limit: 3g` 안이다.
 
 ### 실험 결과 (2026-11-20)
@@ -859,9 +859,9 @@ docker compose stop spark                                      # 정지. 체크�
 ### 프로파일 판정: S1+S2+S3 (2026-11-20)
 
 - 원자료: [steady](../measurements/2026-11-20-spark-s13-steady.json), [step](../measurements/2026-11-20-spark-s13-step.json). 기준값은 [steady](../measurements/2026-11-19-baseline-steady.json)·[step](../measurements/2026-11-19-baseline-step.json)이다. 각 1회 실행했다. 생성기 run_id는 steady `7e9f312675304966abd9e780fe51166b`, step `f9a0ab2c52ed42b1af5713b7edb0eaf5`, Spark run_id는 steady `6ddc17f4-7345-444a-8711-fce10701c854`, step `841bf3b4-4ab7-4994-bba1-4cb164c64e5a`다.
-- Grafana 캡처: steady(2026-11-20 01:01:30~01:13:30 KST) [파이프라인 운영](../../images/2026-11-20-spark-s13-steady/pipeline.png)·[주문 현황](../../images/2026-11-20-spark-s13-steady/orders.png), step(01:12:51~01:26:51 KST) [파이프라인 운영](../../images/2026-11-20-spark-s13-step/pipeline.png)·[주문 현황](../../images/2026-11-20-spark-s13-step/orders.png).
+- Grafana 캡처: steady(2026-11-20 01:01:30~01:13:30 KST) [파이프라인 운영](../../images/captures/2026-11-20-spark-s13-steady/pipeline.png)·[주문 현황](../../images/captures/2026-11-20-spark-s13-steady/orders.png), step(01:12:51~01:26:51 KST) [파이프라인 운영](../../images/captures/2026-11-20-spark-s13-step/pipeline.png)·[주문 현황](../../images/captures/2026-11-20-spark-s13-step/orders.png).
 
-| 구간 | 트리거 평균 (기준 → 후보) | 트리거 p99 | 실처리량 EPS | 종단 간 p99 | ACK p95 100ms 이내 비율 |
+| 구간 | 트리거 평균 (기준 → 후보) | 트리거 p99 | 실처리량 EPS | E2E p99 | ACK p95 100ms 이내 비율 |
 | --- | --- | --- | --- | --- | --- |
 | steady base 5,000 | 2,643 → 2,269ms | 3,266 → 2,704ms | 9,451 → 11,014 | 7.38 → 6.80초 | 100% → 100% |
 | steady peak 7,500 | 3,542 → 3,226ms | 4,976 → **5,955ms** | 10,558 → 11,559 | 8.06 → 8.56초 | 99.7% → **98.0%** |
@@ -871,10 +871,10 @@ docker compose stop spark                                      # 정지. 체크�
 | step 11,000 | 4,941 → 4,472ms | 5,642 → 6,237ms | 10,803 → 12,161 | 9.88 → 9.88초 | 72.3% → 79.8% |
 
 - 지속 용량: 10,000 EPS 단계까지 통과했다(목표 충족). 11,000 단계는 backlog 증가 추세(24.3건/초)로 실패했다. 실처리량은 단계마다 15~22% 늘었다.
-- 평시 피크: 트리거 평균은 9% 줄었으나 p99(5,955ms)가 목표 3,500ms를 넘었다. 구간 배치 59개 중 5초를 넘은 2개(batch 71: 5,115ms, 89: 5,854ms)가 p99를 정했다. 두 배치는 분류·계측 action이 3.0~3.2초로, 같은 크기의 다른 배치(1.6~1.9초)보다 길었다.
+- 평시 피크: 트리거 평균은 9% 줄었으나 p99(5,955ms)가 목표 3,500ms를 넘었다. ACK p95가 100ms 이내인 1초 구간 비율도 98.0%로 기준 99%에 미달했다. 구간 배치 59개 중 5초를 넘은 2개(batch 71: 5,115ms, 89: 5,854ms)가 p99를 정했다. 두 배치는 분류·계측 action이 3.0~3.2초로, 같은 크기의 다른 배치(1.6~1.9초)보다 길었다.
 - Spark CPU 상한에 걸린 주기 비율: steady 19.9% → 9.5%, step 23.6% → 11.6%. CPU 사용 시간은 steady 1,184초 → 985초, step 1,930초 → 1,528초다.
 - **메모리:** Spark `memory.peak`가 3,221,356,544B로 `mem_limit: 3g`(3,221,225,472B)에 닿았다. OOM kill은 0이다. steady 후반 `anon`은 2.99GB, `file`은 3~12MB로 기준값(`anon` 2.91GB, `file` 58~200MB)보다 page cache가 더 밀려났다. Arrow UDF로 Python 워커마다 pyarrow·pandas가 올라온 영향으로 추정한다. 평시 피크의 느린 배치 2개와의 관계는 확인하지 않았다. 선택 기준 4는 경계 상태다.
-- 판정: 선택 기준 3 중 지속 용량·종단 간 지연·공통 기준은 충족했다. 평시 피크 트리거 p99는 미충족이다. 다음 후보는 메모리 여유 확보(드라이버 힙 축소 또는 `mem_limit` 조정)와 느린 배치 원인 확인이다.
+- 판정: 선택 기준 3 중 지속 용량·E2E 지연·공통 기준은 충족했다. 평시 피크 트리거 p99는 미충족이다. 다음 후보는 메모리 여유 확보(드라이버 힙 축소 또는 `mem_limit` 조정)와 느린 배치 원인 확인이다.
 
 ### 메모리 분해 (2026-11-20)
 
@@ -882,10 +882,10 @@ S1~S3 적용 이미지로 `steady.csv`를 4회 실행해 Spark 컨테이너 메�
 
 | 실행 | 조건 | 생성기 run_id | Spark run_id | 원자료 | Grafana 캡처 (KST) |
 | --- | --- | --- | --- | --- | --- |
-| M1 | 기본 설정 | `8626d3ef2a2d47f691c950e1567d1b08` | `c94f2e3f-00bc-4efa-bc2e-b2117361166a` | [JSON](../measurements/2026-11-20-spark-mem-jstat.json) | 10:32:10~10:44:10 [파이프라인](../../images/2026-11-20-spark-mem-jstat/pipeline.png)·[주문](../../images/2026-11-20-spark-mem-jstat/orders.png) |
-| M2 | NMT 켬(`-XX:NativeMemoryTracking=summary`, `jcmd` 30초) | `7e669dd4a4404d60b6b24022c636d108` | `f045386b-85f7-4afa-8414-56229389a829` | [JSON](../measurements/2026-11-20-spark-mem-nmt.json) | 14:55:10~15:07:10 [파이프라인](../../images/2026-11-20-spark-mem-nmt/pipeline.png)·[주문](../../images/2026-11-20-spark-mem-nmt/orders.png) |
-| M3 | `MALLOC_ARENA_MAX=2` (JVM·Python 워커 모두) | `04967092b32f4b51a1329f4a8ff7696c` | `e06feed2-631b-45ea-9ec9-fff84d8943f7` | [JSON](../measurements/2026-11-20-spark-mem-arena2.json) | 15:30:57~15:42:57 [파이프라인](../../images/2026-11-20-spark-mem-arena2/pipeline.png)·[주문](../../images/2026-11-20-spark-mem-arena2/orders.png) |
-| M4 | M3 반복. 호스트 CPU 상위 프로세스 5초 기록 추가 | `0a557bf8b7d74f1c8431bbec257da7f0` | `c4f45b78-f3dc-482a-9156-9d3d63dea97e` | [JSON](../measurements/2026-11-20-spark-mem-arena2-2.json) | 16:12:49~16:24:49 [파이프라인](../../images/2026-11-20-spark-mem-arena2-2/pipeline.png)·[주문](../../images/2026-11-20-spark-mem-arena2-2/orders.png) |
+| M1 | 기본 설정 | `8626d3ef2a2d47f691c950e1567d1b08` | `c94f2e3f-00bc-4efa-bc2e-b2117361166a` | [JSON](../measurements/2026-11-20-spark-mem-jstat.json) | 10:32:10~10:44:10 [파이프라인](../../images/captures/2026-11-20-spark-mem-jstat/pipeline.png)·[주문](../../images/captures/2026-11-20-spark-mem-jstat/orders.png) |
+| M2 | NMT 켬(`-XX:NativeMemoryTracking=summary`, `jcmd` 30초) | `7e669dd4a4404d60b6b24022c636d108` | `f045386b-85f7-4afa-8414-56229389a829` | [JSON](../measurements/2026-11-20-spark-mem-nmt.json) | 14:55:10~15:07:10 [파이프라인](../../images/captures/2026-11-20-spark-mem-nmt/pipeline.png)·[주문](../../images/captures/2026-11-20-spark-mem-nmt/orders.png) |
+| M3 | `MALLOC_ARENA_MAX=2` (JVM·Python 워커 모두) | `04967092b32f4b51a1329f4a8ff7696c` | `e06feed2-631b-45ea-9ec9-fff84d8943f7` | [JSON](../measurements/2026-11-20-spark-mem-arena2.json) | 15:30:57~15:42:57 [파이프라인](../../images/captures/2026-11-20-spark-mem-arena2/pipeline.png)·[주문](../../images/captures/2026-11-20-spark-mem-arena2/orders.png) |
+| M4 | M3 반복. 호스트 CPU 상위 프로세스 5초 기록 추가 | `0a557bf8b7d74f1c8431bbec257da7f0` | `c4f45b78-f3dc-482a-9156-9d3d63dea97e` | [JSON](../measurements/2026-11-20-spark-mem-arena2-2.json) | 16:12:49~16:24:49 [파이프라인](../../images/captures/2026-11-20-spark-mem-arena2-2/pipeline.png)·[주문](../../images/captures/2026-11-20-spark-mem-arena2-2/orders.png) |
 
 **메모리 (peak 구간 최대)**
 
@@ -912,7 +912,7 @@ S1~S3 적용 이미지로 `steady.csv`를 4회 실행해 Spark 컨테이너 메�
 
 **지연 (같은 `steady.csv`)**
 
-| 실행 | 구간 | 생성 EPS | ACK p95 100ms 이내 비율 | 트리거 평균 / p99 | 5초 초과 배치 | backlog 최대 | 종단 간 p99 | 호스트 사용 코어 평균 |
+| 실행 | 구간 | 생성 EPS | ACK p95 100ms 이내 비율 | 트리거 평균 / p99 | 5초 초과 배치 | backlog 최대 | E2E p99 | 호스트 사용 코어 평균 |
 | --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |
 | M1 | base | 4,733 | 91.1% | 4,375 / 9,770ms | 5 | 0 | 12.32초 | 4.50 |
 | M1 | peak | 7,350 | 92.6% | 4,406 / 11,545ms | 12 | 0 | 13.85초 | |
@@ -964,21 +964,21 @@ S1~S3 적용 이미지로 `steady.csv`를 4회 실행해 Spark 컨테이너 메�
 **선택 기준**
 
 - 메모리: 부하 구간 `memory.current` 최대가 기준보다 낮고 OOM kill이 0이다. catch-up 중 `memory.peak`도 함께 기록한다.
-- 지연: 평시 피크 트리거 p99·종단 간 p99가 기준보다 나빠지지 않는다. 같은 실행의 생성기 ACK p95 100ms 이내 비율이 99% 미만이거나 호스트 사용 코어 평균이 4를 넘으면 호스트 경합 실행으로 보고 다시 측정한다(M3 사례).
+- 지연: 평시 피크 트리거 p99·E2E p99가 기준보다 나빠지지 않는다. 같은 실행의 생성기 ACK p95 100ms 이내 비율이 99% 미만이거나 호스트 사용 코어 평균이 4를 넘으면 호스트 경합 실행으로 보고 다시 측정한다(M3 사례).
 - 실행마다 새 `SPARK_CHECKPOINT_DIR`을 쓰고, Kafka 끝 offset까지 catch-up한 뒤 부하를 시작한다.
 
 ### JVM 튜닝 결과 (2026-11-20)
 
 | 실행 | 조건 | 생성기 run_id | Spark run_id | 원자료 | Grafana 캡처 (KST) |
 | --- | --- | --- | --- | --- | --- |
-| J7 | J1 + GC 로그(`SPARK_SUBMIT_OPTS=-Xlog:gc:file=/tmp/gc.log:time,uptime`, 측정용 override) | `2460c8919eba46f9a9b483e8ab9dfaf6` | `b95059b6-2119-44b3-ae8b-3b84e0f25985` | [JSON](../measurements/2026-11-20-spark-jvm-j7-gclog.json) | 17:55:45~18:07:45 [파이프라인](../../images/2026-11-20-spark-jvm-j7-gclog/pipeline.png)·[주문](../../images/2026-11-20-spark-jvm-j7-gclog/orders.png) |
-| J2 | J1 + GC 로그 + `--driver-memory 1536m` | `07e29c5e109142fa978f5201ecf68ad3` | `f4dbe991-5f3d-45c3-bfdb-73870dd0c244` | [JSON](../measurements/2026-11-20-spark-jvm-j2-xmx1536m.json) | 18:14:33~18:26:33 [파이프라인](../../images/2026-11-20-spark-jvm-j2-xmx1536m/pipeline.png)·[주문](../../images/2026-11-20-spark-jvm-j2-xmx1536m/orders.png) |
+| J7 | J1 + GC 로그(`SPARK_SUBMIT_OPTS=-Xlog:gc:file=/tmp/gc.log:time,uptime`, 측정용 override) | `2460c8919eba46f9a9b483e8ab9dfaf6` | `b95059b6-2119-44b3-ae8b-3b84e0f25985` | [JSON](../measurements/2026-11-20-spark-jvm-j7-gclog.json) | 17:55:45~18:07:45 [파이프라인](../../images/captures/2026-11-20-spark-jvm-j7-gclog/pipeline.png)·[주문](../../images/captures/2026-11-20-spark-jvm-j7-gclog/orders.png) |
+| J2 | J1 + GC 로그 + `--driver-memory 1536m` | `07e29c5e109142fa978f5201ecf68ad3` | `f4dbe991-5f3d-45c3-bfdb-73870dd0c244` | [JSON](../measurements/2026-11-20-spark-jvm-j2-xmx1536m.json) | 18:14:33~18:26:33 [파이프라인](../../images/captures/2026-11-20-spark-jvm-j2-xmx1536m/pipeline.png)·[주문](../../images/captures/2026-11-20-spark-jvm-j2-xmx1536m/orders.png) |
 
 GC 정지와 배치 대조는 [spark_gc_batches.py](../measurements/spark_gc_batches.py)로 했다. Kafka 보존 기간이 지나 토픽 earliest와 latest가 같아 J7은 catch-up 없이 시작했다.
 
 **J7 (GC 로그)**
 
-| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | backlog 최대 | 종단 간 p99 | 호스트 사용 코어 평균 |
+| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | backlog 최대 | E2E p99 | 호스트 사용 코어 평균 |
 | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |
 | base | 4,939 | 98.1% | 3,396 / 4,617ms | 0 | 0 | 8.19초 | 4.40 |
 | peak | 7,246 | 87.0% | 4,522 / 9,428ms | 14 | 8,434 | 13.72초 | |
@@ -1005,19 +1005,19 @@ GC 정지와 배치 대조는 [spark_gc_batches.py](../measurements/spark_gc_bat
 | base 트리거 평균 / p99 | 2,585 / 3,456ms | 2,840 / 3,710ms |
 | peak 트리거 평균 / p99 | 3,393 / 4,387ms | 3,498 / 4,687ms |
 | peak 5초 초과 배치 / backlog 최대 | 0 / 0 | 0 / 0 |
-| peak 종단 간 p99 | 8.11초 | 8.11초 |
+| peak E2E p99 | 8.11초 | 8.11초 |
 | peak 실처리량 | 10,999 EPS | 10,666 EPS |
 | 생성기 ACK p95 100ms 이내 (peak) / 호스트 사용 코어 평균 | 99.0% / 3.32 | 99.3% / 3.62 |
 
 - 메모리: 부하 중 최대가 약 420MB 줄었고 catch-up 중에도 3g에 닿지 않았다. catch-up 배치 수가 M4(105)보다 적어 catch-up 비교는 같은 조건이 아니다. GC 로그상 catch-up 중 Full GC·evacuation 실패는 0이다.
 - GC: 워밍업 이후 정지 합 11.3초(923회), 최대 정지 78ms(Remark)다. 힙이 작아져 Remark 최대가 J7 156ms에서 78ms로 줄었다. 트리거 3,500ms 초과 25배치의 배치당 GC 정지 평균 145ms, 이하 72배치 106ms로 J7과 같은 결론이다.
-- 지연: peak 트리거 p99가 M4보다 300ms(7%) 길다. 깨끗한 실행 사이 편차(M2 4,115ms, M4 4,387ms)와 같은 크기라 1회 측정으로 악화를 구분할 수 없다. 종단 간 p99는 같고 5초 초과 배치는 둘 다 0이다.
+- 지연: peak 트리거 p99가 M4보다 300ms(7%) 길다. 깨끗한 실행 사이 편차(M2 4,115ms, M4 4,387ms)와 같은 크기라 1회 측정으로 악화를 구분할 수 없다. E2E p99는 같고 5초 초과 배치는 둘 다 0이다.
 - 판정: 채택. 3g 한도 안 여유를 확보했고, 지연 악화는 측정 편차 범위 안이다. `SPARK_DRIVER_MEMORY`를 `1536m`으로 바꾼다. catch-up 중 `memory.peak`가 3g 아래라 진행 순서 4(J3·P2)는 실행하지 않는다.
 - 남은 목표: 평시 피크 트리거 p99 ≤ 3,500ms는 J1·J2 적용 후에도 4.4~4.7초로 미충족이다. GC·메모리가 원인이 아니므로 배치 처리 자체 시간(분류·JDBC 쓰기)을 다시 분해한다.
 
 ### 배치 시간 재분해 (2026-11-20)
 
-J1·J2 적용 상태(`MALLOC_ARENA_MAX=2`, `--driver-memory 1536m`)에서 배치 시간을 다시 나눴다. 원자료: [2026-11-20-spark-batch-breakdown.json](../measurements/2026-11-20-spark-batch-breakdown.json). Grafana 캡처(18:35:17~18:47:17 KST): [파이프라인 운영](../../images/2026-11-20-spark-batch-breakdown/pipeline.png), [주문 현황](../../images/2026-11-20-spark-batch-breakdown/orders.png). 생성기 run_id `a71593c27129460f9b92805e1e30680e`, Spark run_id `b9ac80db-93a9-43e2-baed-0556eac75126`.
+J1·J2 적용 상태(`MALLOC_ARENA_MAX=2`, `--driver-memory 1536m`)에서 배치 시간을 다시 나눴다. 원자료: [2026-11-20-spark-batch-breakdown.json](../measurements/2026-11-20-spark-batch-breakdown.json). Grafana 캡처(18:35:17~18:47:17 KST): [파이프라인 운영](../../images/captures/2026-11-20-spark-batch-breakdown/pipeline.png), [주문 현황](../../images/captures/2026-11-20-spark-batch-breakdown/orders.png). 생성기 run_id `a71593c27129460f9b92805e1e30680e`, Spark run_id `b9ac80db-93a9-43e2-baed-0556eac75126`.
 
 **입력 건수와 배치 시간(J2 실행, catch-up 포함 185배치, 7,331~54,999건)**
 
@@ -1113,9 +1113,9 @@ PySpark 4.2는 `functions`·`Column` 메서드 호출마다 `_with_origin`(`pysp
 
 | 실행 | 생성기 run_id | Spark run_id | 원자료 | Grafana 캡처 (KST) |
 | --- | --- | --- | --- | --- |
-| S5a | `df5bd47bf1114e15ae35eaeb3d0a417c` | `fc4221ad-2177-4323-86f1-348158196971` | [JSON](../measurements/2026-11-23-spark-s5a-steady.json) | 10:43:33~10:55:33 [파이프라인](../../images/2026-11-23-spark-s5a-steady/pipeline.png)·[주문](../../images/2026-11-23-spark-s5a-steady/orders.png) |
+| S5a | `df5bd47bf1114e15ae35eaeb3d0a417c` | `fc4221ad-2177-4323-86f1-348158196971` | [JSON](../measurements/2026-11-23-spark-s5a-steady.json) | 10:43:33~10:55:33 [파이프라인](../../images/captures/2026-11-23-spark-s5a-steady/pipeline.png)·[주문](../../images/captures/2026-11-23-spark-s5a-steady/orders.png) |
 
-| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | backlog 최대 | 종단 간 p99 | 판정 |
+| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | backlog 최대 | E2E p99 | 판정 |
 | --- | ---: | ---: | --- | ---: | ---: | ---: | --- |
 | base | 4,996 | 100% | 2,231 / 2,742ms | 0 | 0 | 6.95초 | 통과 |
 | peak | 7,490 | 100% | 2,879 / **3,659ms** | 0 | 0 | 7.50초 | 트리거 p99 미달(목표 3,500ms) |
@@ -1170,9 +1170,9 @@ PySpark 4.2는 `functions`·`Column` 메서드 호출마다 `_with_origin`(`pysp
 
 | 실행 | 생성기 run_id | Spark run_id | 원자료 | Grafana 캡처 (KST) |
 | --- | --- | --- | --- | --- |
-| D1 | `daa35e44321448169e000a1c109c06e1` | `7bb9a495-5ad6-4ac0-be8a-ea6f3d023cf5` | [JSON](../measurements/2026-11-23-spark-d1-steady.json) | 11:18:14~11:30:14 [파이프라인](../../images/2026-11-23-spark-d1-steady/pipeline.png)·[주문](../../images/2026-11-23-spark-d1-steady/orders.png) |
+| D1 | `daa35e44321448169e000a1c109c06e1` | `7bb9a495-5ad6-4ac0-be8a-ea6f3d023cf5` | [JSON](../measurements/2026-11-23-spark-d1-steady.json) | 11:18:14~11:30:14 [파이프라인](../../images/captures/2026-11-23-spark-d1-steady/pipeline.png)·[주문](../../images/captures/2026-11-23-spark-d1-steady/orders.png) |
 
-| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | backlog 최대 | 종단 간 p99 | 판정 |
+| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | backlog 최대 | E2E p99 | 판정 |
 | --- | ---: | ---: | --- | ---: | ---: | ---: | --- |
 | base | 4,997 | 100% | 1,887 / 2,358ms | 0 | 0 | 6.51초 | 통과 |
 | peak | 7,487 | 100% | 2,633 / **3,246ms** | 0 | 0 | 7.16초 | **통과** |
@@ -1200,9 +1200,9 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 | 실행 | 생성기 run_id | Spark run_id | 원자료 | Grafana 캡처 (KST) |
 | --- | --- | --- | --- | --- |
-| D1 step | `32b9fdb4963341708078dcc5e2f43f99` | `d2c2ec78-4450-4ec9-a8bf-3b0b977148aa` | [JSON](../measurements/2026-11-23-spark-d1-step.json) | 12:01:49~12:15:49 [파이프라인](../../images/2026-11-23-spark-d1-step/pipeline.png)·[주문](../../images/2026-11-23-spark-d1-step/orders.png) |
+| D1 step | `32b9fdb4963341708078dcc5e2f43f99` | `d2c2ec78-4450-4ec9-a8bf-3b0b977148aa` | [JSON](../measurements/2026-11-23-spark-d1-step.json) | 12:01:49~12:15:49 [파이프라인](../../images/captures/2026-11-23-spark-d1-step/pipeline.png)·[주문](../../images/captures/2026-11-23-spark-d1-step/orders.png) |
 
-| 단계 | 생성 EPS | 트리거 평균 / p99 | 5초 초과 | 실처리량 | backlog 최대 (마지막 60초) | 종단 간 p99 | ACK p95 100ms 이내 | 판정 |
+| 단계 | 생성 EPS | 트리거 평균 / p99 | 5초 초과 | 실처리량 | backlog 최대 (마지막 60초) | E2E p99 | ACK p95 100ms 이내 | 판정 |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | 8k | 7,943 | 2,801 / 3,820ms | 0 | 14,180 | 0 | 7.32초 | 90.8% | 통과 |
 | 9k | 8,970 | 2,949 / 3,500ms | 0 | 15,207 | 0 | 7.61초 | 95.8% | 통과 |
@@ -1224,7 +1224,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 - 지속 용량 목표(10,000 EPS)는 바꾸지 않는다. 이 실험은 11,000·12,000 EPS 참고 단계의 여유를 확인하고, 상한을 올렸을 때의 위험을 재는 것이다.
 - 채택 기준:
   1. 메모리: catch-up(65,000건 배치) 중 `memory.peak`가 3GiB 한도보다 낮고 OOM kill이 0이다. 55,000에서는 2,906,865,664B였다.
-  2. 평시: `steady.csv` 평시 피크 트리거 p99 ≤ 3,500ms, 종단 간 p99 ≤ 10초. 평시 배치는 약 37,000건이라 상한과 관계없을 것으로 예상하지만 확인한다.
+  2. 평시: `steady.csv` 평시 피크 트리거 p99 ≤ 3,500ms, E2E p99 ≤ 10초. 평시 배치는 약 37,000건이라 상한과 관계없을 것으로 예상하지만 확인한다.
   3. 지속 용량: `step.csv` 10,000 EPS 단계 통과를 유지한다. 11,000·12,000 EPS는 참고값으로 기록한다.
   4. JDBC: 쓰기 파티션은 Kafka 파티션 3개를 따른다. 파티션당 행 수가 `SPARK_JDBC_BATCH_SIZE` 50,000 이하인지 확인한다. 65,000건이 고르게 나뉘면 파티션당 약 21,700건이다.
 - 실행마다 새 checkpoint를 쓰고, catch-up을 마친 뒤 부하를 시작한다.
@@ -1233,17 +1233,17 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 | 실행 | 생성기 run_id | Spark run_id | 원자료 | Grafana 캡처 (KST) |
 | --- | --- | --- | --- | --- |
-| B1 steady | `c0502d3f59d94b72ba8d90139b0ed650` | `f96af50e-0f51-4149-a371-46041df12cbb` | [JSON](../measurements/2026-11-23-spark-b1-steady.json) | 12:40:37~12:52:37 [파이프라인](../../images/2026-11-23-spark-b1-steady/pipeline.png)·[주문](../../images/2026-11-23-spark-b1-steady/orders.png) |
-| B1 step | `69224bca024b4784a600c96dce7f9dd6` | `4558baab-1b69-4330-8523-e8cf4528f30a` | [JSON](../measurements/2026-11-23-spark-b1-step.json) | 13:06:00~13:20:00 [파이프라인](../../images/2026-11-23-spark-b1-step/pipeline.png)·[주문](../../images/2026-11-23-spark-b1-step/orders.png) |
+| B1 steady | `c0502d3f59d94b72ba8d90139b0ed650` | `f96af50e-0f51-4149-a371-46041df12cbb` | [JSON](../measurements/2026-11-23-spark-b1-steady.json) | 12:40:37~12:52:37 [파이프라인](../../images/captures/2026-11-23-spark-b1-steady/pipeline.png)·[주문](../../images/captures/2026-11-23-spark-b1-steady/orders.png) |
+| B1 step | `69224bca024b4784a600c96dce7f9dd6` | `4558baab-1b69-4330-8523-e8cf4528f30a` | [JSON](../measurements/2026-11-23-spark-b1-step.json) | 13:06:00~13:20:00 [파이프라인](../../images/captures/2026-11-23-spark-b1-step/pipeline.png)·[주문](../../images/captures/2026-11-23-spark-b1-step/orders.png) |
 
 | 기준 | 결과 | 판정 |
 | --- | --- | --- |
 | 1. 메모리 | steady 실행 앞 catch-up(65,000건 배치 130개) 뒤 `memory.peak` 2,979,885,056B, step 실행 앞 catch-up 뒤 2,967,691,264B, step 실행 종료 시 3,032,039,424B. 3GiB(3,221,225,472B)까지 여유는 최소 189MB다. OOM kill 0 | 충족. 여유가 작다 |
-| 2. 평시 | steady 평시 피크 트리거 평균 2,562ms, p99 3,268ms(D1의 55,000에서는 3,246ms), 종단 간 p99 7.08초. base p99 2,330ms. ACK p95 100ms 이내 100%, 호스트 사용 코어 평균 2.83 | 충족 |
+| 2. 평시 | steady 평시 피크 트리거 평균 2,562ms, p99 3,268ms(D1의 55,000에서는 3,246ms), E2E p99 7.08초. base p99 2,330ms. ACK p95 100ms 이내 100%, 호스트 사용 코어 평균 2.83 | 충족 |
 | 3. 지속 용량 | 아래 step 표 참고. 10,000 EPS를 포함해 12,000 EPS(참고)까지 모든 단계에서 backlog 0 | 충족 |
 | 4. JDBC | catch-up 중 65,000건 배치에서 INSERT당 최대 18,836행(최근 40분 `system.query_log`) | 충족 |
 
-| 단계 | 생성 EPS | 트리거 평균 / p99 | 실처리량 | backlog 최대 | 종단 간 p99 | ACK p95 100ms 이내 |
+| 단계 | 생성 EPS | 트리거 평균 / p99 | 실처리량 | backlog 최대 | E2E p99 | ACK p95 100ms 이내 |
 | --- | ---: | --- | ---: | ---: | ---: | ---: |
 | 8k | 7,983 | 2,744 / 3,461ms | 14,542 | 0 | 7.25초 | 100% |
 | 9k | 8,979 | 2,941 / 3,590ms | 15,264 | 0 | 7.42초 | 100% |
@@ -1264,14 +1264,14 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 - 조건: 커밋 `018060b`, `.env` 기본값(`SPARK_MAX_OFFSETS_PER_TRIGGER=65000`, `SPARK_DRIVER_MEMORY=1536m`, Spark `cpus` 4, `mem_limit` 3g). Spark는 `spark` 서비스를 새 체크포인트 `/opt/spark/checkpoints/spike2-20261123`·`latest`로 다시 만들고, 첫 배치 진행 기록을 확인한 뒤 생성기를 시작했다. 생성기 2개 프로세스가 각각 `spike-half.csv`(2,500/6,000/2,500 EPS)로 동시에 실행했다. 판정은 `spike.csv` 구간 경계로 했다([PRD 06 설정](06-load-profile.md#설정)). Grafana는 켜 두었고 Kafka UI는 껐다.
 - 실행: 14:52:52~15:05:22 KST(생성기 기준 750초). 생성기 run_id `2a3603ae7c6146f68c7f9847eba4bfa0`·`fd89261af31b456db74e07c5adee6bc2`, Spark run_id `3896a384-961c-4847-9c6b-940201e6e21b`.
-- 원자료: [2026-11-23-spark-spike2.json](../measurements/2026-11-23-spark-spike2.json)(`analyze_profile.py` 출력, 자원 기록 포함). Grafana 캡처(14:52:22~15:06:22 KST): [파이프라인 운영](../../images/2026-11-23-spark-spike2/pipeline.png), [주문 현황](../../images/2026-11-23-spark-spike2/orders.png).
+- 원자료: [2026-11-23-spark-spike2.json](../measurements/2026-11-23-spark-spike2.json)(`analyze_profile.py` 출력, 자원 기록 포함). Grafana 캡처(14:52:22~15:06:22 KST): [파이프라인 운영](../../images/captures/2026-11-23-spark-spike2/pipeline.png), [주문 현황](../../images/captures/2026-11-23-spark-spike2/orders.png).
 
 **판정: 스파이크 기준 1~3과 공통 기준 통과.** 12,000 EPS 스파이크를 거의 실시간으로 처리했고, backlog는 한 번만 생겨 두 배치 안에 해소됐다. 이로써 튜닝 목표 세 가지(평시·지속 용량·스파이크)를 모두 충족했다.
 
 | 기준 | 결과 | 판정 |
 | --- | --- | --- |
 | 1. 생성 | spike 구간 생성 11,890 EPS(−0.9%), ACK 11,821 EPS. 두 run_id 합계 | 통과 |
-| 2. 누적 | spike 배치 29개, 트리거 평균 4,129ms, p99·최대 8,826ms, 5초 초과 3개. 실처리량 14,164 EPS. backlog 최대 17,555건(경과 345.9초, batch 69) → 다음 배치 4,262건 → 그다음 0. spike 마지막 60초 backlog 0. spike 중 종단 간 지연 p99 12.17초, 최대 13.96초 | 기록 |
+| 2. 누적 | spike 배치 29개, 트리거 평균 4,129ms, p99·최대 8,826ms, 5초 초과 3개. 실처리량 14,164 EPS. backlog 최대 17,555건(경과 345.9초, batch 69) → 다음 배치 4,262건 → 그다음 0. spike 마지막 60초 backlog 0. spike 중 E2E 지연 p99 12.17초, 최대 13.96초 | 기록 |
 | 3. 회복 | spike 종료(경과 450초) 뒤 첫 배치(452.1초)가 backlog 0이고 Kafka → 콜백 p95 4,845ms ≤ warmup 평균 4,791ms × 1.5. 회복 시간 2.1초(기준 60초) | 통과 |
 | 공통 1. 건수 | 생성 = ACK 4,751,556. 정상 주문 생성 4,040,208(2,021,601 + 2,018,607) = `silver.order_events` 행 수 = `event_id` 고유 수 | 통과 |
 | 공통 2. 오류 | Spark 시도 152개 모두 `succeeded`, run_id 1개(재시작 0회). 생성기 전송 실패·출력 오류 0 | 통과 |
@@ -1279,7 +1279,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 구간별 요약:
 
-| 구간 | 생성 EPS | 트리거 평균 / p99 | 실처리량 | backlog 최대 | 종단 간 p99 / 최대 | ACK p95 100ms 이내 |
+| 구간 | 생성 EPS | 트리거 평균 / p99 | 실처리량 | backlog 최대 | E2E p99 / 최대 | ACK p95 100ms 이내 |
 | --- | ---: | --- | ---: | ---: | --- | ---: |
 | warmup(120초 이후) | 4,996 | 1,955 / 2,869ms | 12,780 | 0 | 6.73 / 7.30초 | 100% |
 | spike | 11,890 | 4,129 / 8,826ms | 14,164 | 17,555 | 12.17 / 13.96초 | 97.0% |
@@ -1299,7 +1299,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 해석:
 
-- **배치 상한 65,000이 스파이크를 흡수했다.** spike 배치는 대부분 약 60,000건을 3.5~4.4초에 처리해 트리거 주기 안에 끝났다. 2026-11-19 3차 측정(상한 55,000, 튜닝 전)에서는 상한 배치가 평균 5,222ms로 주기를 넘어 backlog가 218,867건까지 쌓였고 회복에 약 40~44초가 걸렸다. 이번에는 회복 2.1초, spike 종단 간 p99가 27.94초에서 12.17초로 줄었다.
+- **배치 상한 65,000이 스파이크를 흡수했다.** spike 배치는 대부분 약 60,000건을 3.5~4.4초에 처리해 트리거 주기 안에 끝났다. 2026-11-19 3차 측정(상한 55,000, 튜닝 전)에서는 상한 배치가 평균 5,222ms로 주기를 넘어 backlog가 218,867건까지 쌓였고 회복에 약 40~44초가 걸렸다. 이번에는 회복 2.1초, spike E2E p99가 27.94초에서 12.17초로 줄었다.
 - **backlog는 batch 68(트리거 8,826ms) 한 번에서만 생겼다.** 같은 시각에 Producer ACK p99가 최대 2,962ms로 튀었다. 원인 조사 결과는 아래와 같다([근거 JSON](../measurements/2026-11-23-spark-spike2-stall.json)).
   - 지연 구간은 14:58:23~14:58:25와 14:58:32~14:58:40 KST 두 번이고, 두 생성기에서 동시에 일어났다. 750초 실행에서 ACK p99가 300ms를 넘은 1초 행 12개가 모두 이 두 구간에 있다.
   - 두 구간은 이 실행에서 1초를 넘긴 `silver.order_events` 병합 두 건과 겹친다. 14:58:23.7~25.6에 1,859ms(85,665행), 14:58:28.3~37.6에 9,370ms(1,549,484행, 100MB, level 5)다. 1,093ms 병합(06:04 UTC) 때는 지연이 없었다.
@@ -1331,7 +1331,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 #### 스파이크 재실행: 1초 cgroup 샘플러 (2026-11-23)
 
 - 조건: 스파이크 판정과 같다(생성기 2개 × `spike-half.csv`, Spark 새 체크포인트 `spike3-20261123`·`latest`). 병합 재현 검증의 1초 cgroup 샘플러를 함께 켰다. 실행 중 Grafana 대시보드가 열려 있었다(아래).
-- 실행: 06:43:50~06:56:20 UTC. 생성기 run_id `dd63a764f5b74db6a506aec4609485d4`·`814cf7f508e0455ca4f3e216025056fc`, Spark run_id `e9262774-4294-47e4-9d14-73b9e7dd8cce`. 원자료: [2026-11-23-spark-spike3.json](../measurements/2026-11-23-spark-spike3.json)(`analyze_profile.py` 출력 + `cgroup_1s` + `notes`). Grafana 캡처(06:43:20~06:57:20 UTC): [파이프라인 운영](../../images/2026-11-23-spark-spike3/pipeline.png), [주문 현황](../../images/2026-11-23-spark-spike3/orders.png).
+- 실행: 06:43:50~06:56:20 UTC. 생성기 run_id `dd63a764f5b74db6a506aec4609485d4`·`814cf7f508e0455ca4f3e216025056fc`, Spark run_id `e9262774-4294-47e4-9d14-73b9e7dd8cce`. 원자료: [2026-11-23-spark-spike3.json](../measurements/2026-11-23-spark-spike3.json)(`analyze_profile.py` 출력 + `cgroup_1s` + `notes`). Grafana 캡처(06:43:20~06:57:20 UTC): [파이프라인 운영](../../images/captures/2026-11-23-spark-spike3/pipeline.png), [주문 현황](../../images/captures/2026-11-23-spark-spike3/orders.png).
 
 **판정: 스파이크 기준 불합격. 대시보드 조회 부하가 섞여 판정에는 쓰지 않는다.**
 
@@ -1341,7 +1341,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 | spike 트리거 평균 / 최대 | 4,129 / 8,826ms | 6,804 / 11,117ms |
 | backlog 최대 | 17,555 | 184,516(spike), 167,474(recovery) |
 | 회복 시간 | 2.1초 | 61.2초(기준 60초 초과) |
-| spike 종단 간 p99 | 12.17초 | 38.12초 |
+| spike E2E p99 | 12.17초 | 38.12초 |
 | ClickHouse CPU 상한 걸린 주기 | 4.8% | 16.2%(190.4초) |
 | `grafana_reader` 쿼리 CPU | 14.2초 | 188.0초 |
 | 공통(건수·오류·재시작) | 통과 | 통과(생성 = ACK 4,610,560, 정상 3,919,336 = silver = 고유 수, 시도 140개 모두 성공) |
@@ -1359,7 +1359,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 #### 스파이크 재실행: 대시보드 닫음, swap-in 기록 (2026-11-23)
 
 - 조건: spike3와 같다. 실행 전에 Grafana 대시보드를 닫았고(사용자가 Grafana 컨테이너도 중지), 측정 중 대시보드 쿼리는 0건이었다. 1초 샘플러에 cgroup별 `pswpin`·`pswpout`·`pgmajfault`와 VM `/proc/vmstat`을 추가했다.
-- 실행: 07:09:09~07:21:39 UTC. 생성기 run_id `e27177fd6f9949c7ac2b57f602e8ed90`·`d6d42920f62f409a968b864cbde37543`, Spark run_id `2b462d25-7468-4738-bb1d-fe4b42ad1783`. 원자료: [2026-11-23-spark-spike4.json](../measurements/2026-11-23-spark-spike4.json)(`analyze_profile.py` 출력 + `cgroup_1s` + `notes`). Grafana 캡처(07:08:40~07:22:40 UTC, 측정 뒤 Grafana를 잠시 켜서 찍음): [파이프라인 운영](../../images/2026-11-23-spark-spike4/pipeline.png), [주문 현황](../../images/2026-11-23-spark-spike4/orders.png).
+- 실행: 07:09:09~07:21:39 UTC. 생성기 run_id `e27177fd6f9949c7ac2b57f602e8ed90`·`d6d42920f62f409a968b864cbde37543`, Spark run_id `2b462d25-7468-4738-bb1d-fe4b42ad1783`. 원자료: [2026-11-23-spark-spike4.json](../measurements/2026-11-23-spark-spike4.json)(`analyze_profile.py` 출력 + `cgroup_1s` + `notes`). Grafana 캡처(07:08:40~07:22:40 UTC, 측정 뒤 Grafana를 잠시 켜서 찍음): [파이프라인 운영](../../images/captures/2026-11-23-spark-spike4/pipeline.png), [주문 현황](../../images/captures/2026-11-23-spark-spike4/orders.png).
 
 **판정: 스파이크 기준 1~3과 공통 기준 통과.** spike2에 이어 두 번째 통과다.
 
@@ -1369,7 +1369,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 | spike 트리거 평균 / 최대 | 4,129 / 8,826ms | 4,907 / 6,276ms |
 | backlog 최대 | 17,555 | 5,584 |
 | 회복 시간 | 2.1초 | 1.2초 |
-| spike 종단 간 p99 / 최대 | 12.17 / 13.96초 | 9.85 / 10.75초 |
+| spike E2E p99 / 최대 | 12.17 / 13.96초 | 9.85 / 10.75초 |
 | 공통 | 통과 | 통과(생성 = ACK 4,727,946, 정상 4,018,647 = silver = 고유 수, 시도 152개 모두 성공, 재시작 0) |
 | CPU 상한 걸린 주기 spark / clickhouse / kafka | 12.8 / 4.8 / 4.3% | 8.2 / 3.8 / 4.3% |
 
@@ -1390,7 +1390,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 #### Kafka 스왑 차단 후 스파이크 재측정 (2026-11-23)
 
 - 변경: Kafka에 `memswap_limit: 2g`(= `mem_limit`)를 적용했다([Kafka PRD](02-kafka-ingestion.md)). 컨테이너를 07:47 UTC에 다시 만들었고, `memory.swap.max` 0을 확인했다. 나머지 조건은 spike4와 같다(대시보드 닫음, 측정 중 `grafana_reader` 쿼리 0건, 1초 샘플러).
-- 실행: 07:50:40~08:03:10 UTC. 생성기 run_id `fbbc5f31d3784944b124455a71f7d9fa`·`c9f3052405dc4c8a93c0adb327b34c65`, Spark run_id `f6e3cd71-3e23-482b-bbf2-0b8f68a5067d`, 체크포인트 `spike5-20261123`. 원자료: [2026-11-23-spark-spike5.json](../measurements/2026-11-23-spark-spike5.json). Grafana 캡처(07:50:10~08:04:10 UTC, 측정 뒤 Grafana를 잠시 켜서 찍음): [파이프라인 운영](../../images/2026-11-23-spark-spike5/pipeline.png), [주문 현황](../../images/2026-11-23-spark-spike5/orders.png).
+- 실행: 07:50:40~08:03:10 UTC. 생성기 run_id `fbbc5f31d3784944b124455a71f7d9fa`·`c9f3052405dc4c8a93c0adb327b34c65`, Spark run_id `f6e3cd71-3e23-482b-bbf2-0b8f68a5067d`, 체크포인트 `spike5-20261123`. 원자료: [2026-11-23-spark-spike5.json](../measurements/2026-11-23-spark-spike5.json). Grafana 캡처(07:50:10~08:04:10 UTC, 측정 뒤 Grafana를 잠시 켜서 찍음): [파이프라인 운영](../../images/captures/2026-11-23-spark-spike5/pipeline.png), [주문 현황](../../images/captures/2026-11-23-spark-spike5/orders.png).
 
 **판정: 스파이크 기준 1~3과 공통 기준 통과.** 회귀는 없다.
 
@@ -1401,7 +1401,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 | spike 트리거 평균 / 최대 | 4,907 / 6,276ms | 4,653 / 5,959ms |
 | backlog 최대 | 5,584 | 3,117 |
 | 회복 시간 | 1.2초 | 4.9초 |
-| spike 종단 간 p99 / 최대 | 9.85 / 10.75초 | 9.70 / 10.48초 |
+| spike E2E p99 / 최대 | 9.85 / 10.75초 | 9.70 / 10.48초 |
 | 공통 | 통과 | 통과(생성 = ACK 4,738,360, 정상 4,028,051 = silver = 고유 수, 시도 151개 모두 성공, 재시작 0) |
 | Kafka swap-in / 스왑 사용량 | 7,213페이지 / 168MiB | 0 / 0 |
 | Kafka GC 150ms 초과 | Remark 1,785ms | 없음 |
@@ -1411,7 +1411,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 - ACK p99가 300ms를 넘은 1초 행은 실행 첫 1초(07:50:40, 692·696ms)뿐이다. 판정에서 빼는 워밍업 구간이다. 새로 띄운 Kafka JVM의 첫 요청이라 그런 것으로 본다(확인하지 않음).
 - Kafka anon 최대가 626MiB에서 721MiB로 늘었다. 스왑에 나갈 수 없어 heap 전체가 RAM에 남기 때문이다. 한도 2GiB까지 여유가 크다.
 - 한계: Kafka를 방금 다시 만들어서, 차단이 없었더라도 아직 스왑이 쌓이기 전이다. 이 실행은 차단 뒤 OOM·회귀가 없음을 확인할 뿐이다. 스왑으로 인한 정지가 사라졌다는 증거는 아니다. 효과를 확인하려면 Kafka가 한도 근처에서 몇 시간 운영된 뒤 `memory.swap.current`가 0이고 swap-in 정지가 없는지 본다.
-- 회복 시간 1.2초 → 4.9초는 성능 차이가 아니다. 회복 시간은 spike 종료(경과 450초) 뒤 조건을 만족한 첫 배치가 끝난 시각까지라서, 배치 주기 5초 안에서 값이 정해진다. 두 실행 모두 spike 종료 전 배치에서 이미 backlog가 0이었다(spike4 446.3초, spike5 449.9초). 그래서 종료 뒤 첫 배치에서 바로 회복으로 집계됐다(spike4 451.2초, spike5 454.9초). spike5는 직전 배치가 종료 0.1초 전에 끝나 집계에서 빠졌을 뿐이다. backlog가 실제로 쌓였다 해소되는 실행(예: [스파이크 측정 3차](06-load-profile.md#스파이크-프로파일-측정-3차-spike-12000-eps-배치-상한-55000건-2026-11-19), 회복 약 40~44초)에서만 이 값으로 처리 능력을 비교할 수 있다. 이번 두 실행의 처리 능력은 backlog 최대(5,584 → 3,117), spike 트리거 평균(4,907 → 4,653ms), spike 종단 간 p99(9.85 → 9.70초)로 비교한다. 모두 spike5가 같거나 조금 낫지만 실행이 각 1회라 차단 효과로 단정하지 않는다.
+- 회복 시간 1.2초 → 4.9초는 성능 차이가 아니다. 회복 시간은 spike 종료(경과 450초) 뒤 조건을 만족한 첫 배치가 끝난 시각까지라서, 배치 주기 5초 안에서 값이 정해진다. 두 실행 모두 spike 종료 전 배치에서 이미 backlog가 0이었다(spike4 446.3초, spike5 449.9초). 그래서 종료 뒤 첫 배치에서 바로 회복으로 집계됐다(spike4 451.2초, spike5 454.9초). spike5는 직전 배치가 종료 0.1초 전에 끝나 집계에서 빠졌을 뿐이다. backlog가 실제로 쌓였다 해소되는 실행(예: [스파이크 측정 3차](06-load-profile.md#스파이크-프로파일-측정-3차-spike-12000-eps-배치-상한-55000건-2026-11-19), 회복 약 40~44초)에서만 이 값으로 처리 능력을 비교할 수 있다. 이번 두 실행의 처리 능력은 backlog 최대(5,584 → 3,117), spike 트리거 평균(4,907 → 4,653ms), spike E2E p99(9.85 → 9.70초)로 비교한다. 모두 spike5가 같거나 조금 낫지만 실행이 각 1회라 차단 효과로 단정하지 않는다.
 
 #### Kafka 스왑 A/B 재현: A(스왑 허용) (2026-11-23)
 
@@ -1434,7 +1434,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 - 해석: 회수할 수 있는 page cache가 많으면, cgroup 한도 회수는 anon보다 page cache를 먼저 회수한다. 그러므로 앞서 본 Kafka 스왑 168MiB는 cgroup 한도 회수만으로 생긴 것이 아니다. VM 전체 메모리가 부족했을 때의 전역 회수에서 생겼을 가능성이 크다(추정). 당시 VM 스왑 사용량은 1.5GiB였다. 지금 VM은 가용 메모리 약 5.7GiB이고, `/proc/vmstat` `pswpout`은 07:05 이후 약 1.3시간 동안 18,912페이지(약 74MiB)만 늘었다. 이번 세션에서는 전역 회수가 거의 일어나지 않는 상태다.
 - B(스왑 차단)는 같은 절차로는 A와 차이가 날 수 없어 실행하지 않았다. 재현하려면 VM 전체 메모리 압력을 일부러 만들어야 한다.
 - 결정(2026-11-23): 효과 근거가 부족해 Kafka `memswap_limit`을 되돌렸다. `compose.yaml`은 스왑 차단 전과 같다. 실행 중인 Kafka도 A 단계에서 다시 만든 컨테이너라 스왑 허용 상태다. VM 전체 메모리 압력 재현은 하지 않았다. [spike5](#kafka-스왑-차단-후-스파이크-재측정-2026-11-23) 기록은 차단 상태의 참고 측정으로 남긴다.
-- spike 구간 종단 간 p99 12.17초는 평시 목표(10초)를 넘지만, 스파이크 기준은 spike 중 지연을 기록만 한다.
+- spike 구간 E2E p99 12.17초는 평시 목표(10초)를 넘지만, 스파이크 기준은 spike 중 지연을 기록만 한다.
 - 근거는 실행 1회다.
 
 ### 지속 용량 판정: 생성기 2개 step (2026-11-23)
@@ -1443,11 +1443,11 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 - 조건: 커밋 `fccadfe`, `.env` 기본값(`SPARK_MAX_OFFSETS_PER_TRIGGER=65000`, Spark `cpus` 4, `mem_limit` 3g), Kafka 스왑 허용(Compose 기본값). Spark는 새 체크포인트 `/opt/spark/checkpoints/step2-20261123`·`latest`로 다시 만들었다. 생성기 2개가 각각 `step-half.csv`로 동시에 실행했다([PRD 06 설정](06-load-profile.md#설정)). Grafana와 Kafka UI는 껐다. 1초 cgroup 샘플러를 켰다.
 - 실행: 17:54:15~18:06:15 KST(생성기 기준 720초). 생성기 run_id `a2e407de11a94129bfc7f66bfae35f7a`·`a968333246074b019021cca50b4a6484`, Spark run_id `1cf7a5df-7d18-4913-9651-cf665972f686`.
-- 원자료: [2026-11-23-spark-step2.json](../measurements/2026-11-23-spark-step2.json). `docker stats` 첫 표본의 값 없는 줄(`--`) 4개는 지우고 분석했다. Grafana 캡처(17:53:45~18:07:15 KST, 실행 뒤 Grafana를 잠깐 켜서 찍음): [파이프라인 운영](../../images/2026-11-23-spark-step2/pipeline.png), [주문 현황](../../images/2026-11-23-spark-step2/orders.png).
+- 원자료: [2026-11-23-spark-step2.json](../measurements/2026-11-23-spark-step2.json). `docker stats` 첫 표본의 값 없는 줄(`--`) 4개는 지우고 분석했다. Grafana 캡처(17:53:45~18:07:15 KST, 실행 뒤 Grafana를 잠깐 켜서 찍음): [파이프라인 운영](../../images/captures/2026-11-23-spark-step2/pipeline.png), [주문 현황](../../images/captures/2026-11-23-spark-step2/orders.png).
 
 **판정: 보류(측정 환경 이상).** 모든 단계에서 생성과 Spark 처리가 이전 실행보다 크게 느렸다. 원인은 설정이 아니라 측정 환경으로 추정하며, 다시 측정한다.
 
-| 단계 | 생성 EPS (두 run_id 합) | 트리거 평균 / 최대 | 5초 초과 | 실처리량 | backlog 최대 (마지막 60초) | 종단 간 p99 | 판정 |
+| 단계 | 생성 EPS (두 run_id 합) | 트리거 평균 / 최대 | 5초 초과 | 실처리량 | backlog 최대 (마지막 60초) | E2E p99 | 판정 |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
 | 8k | 7,279 (−9.0%) | 5,481 / 24,926ms | 6 | 7,325 | 6,020 | 32.50초 | 생성 미달 |
 | 9k | 8,163 (−9.3%) | 5,575 / 9,728ms | 11 | 9,547 | 39,707 | 23.24초 | 생성 미달 |
@@ -1475,11 +1475,11 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 - 조건: 위와 같다. 새 체크포인트 `/opt/spark/checkpoints/step3-20261123`를 썼다. 생성기 시작 직후(09:13 UTC 무렵) 사용자가 VS Code(VM 안 `vscode-server`)를 내렸다.
 - 실행: 18:11:51~18:23:51 KST(생성기 기준 720초). 생성기 run_id `c39b3a926c154958ba6084c24d73c488`·`27c06e40c62947398c5e00d33dcb6e7d`, Spark run_id `2a195684-cdfc-4123-b6f2-90050709b854`.
-- 원자료: [2026-11-23-spark-step3.json](../measurements/2026-11-23-spark-step3.json). Grafana 캡처(18:11:20~18:25:00 KST, 실행 뒤 Grafana를 잠깐 켜서 찍음): [파이프라인 운영](../../images/2026-11-23-spark-step3/pipeline.png), [주문 현황](../../images/2026-11-23-spark-step3/orders.png).
+- 원자료: [2026-11-23-spark-step3.json](../measurements/2026-11-23-spark-step3.json). Grafana 캡처(18:11:20~18:25:00 KST, 실행 뒤 Grafana를 잠깐 켜서 찍음): [파이프라인 운영](../../images/captures/2026-11-23-spark-step3/pipeline.png), [주문 현황](../../images/captures/2026-11-23-spark-step3/orders.png).
 
 **판정: 지속 용량 12,000 EPS(`step.csv` 전 단계 통과).** [PRD 06 완료 기준 6](06-load-profile.md#완료-기준)의 step 판정을 마쳤다.
 
-| 단계 | 생성 EPS (두 run_id 합) | 트리거 평균 / 최대 | 5초 초과 | 실처리량 | backlog 최대 (마지막 60초) | 종단 간 p99 | ACK p95 100ms 이내 | 판정 |
+| 단계 | 생성 EPS (두 run_id 합) | 트리거 평균 / 최대 | 5초 초과 | 실처리량 | backlog 최대 (마지막 60초) | E2E p99 | ACK p95 100ms 이내 | 판정 |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | 8k | 7,781 (−2.7%) | 3,509 / 5,411ms | 1 | 10,958 | 0 | 10.10초 | 94.1% | 통과 |
 | 9k | 8,866 | 3,609 / 4,165ms | 0 | 12,284 | 0 | 8.07초 | 97.4% | 통과 |
@@ -1499,11 +1499,11 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 - 조건: 커밋 `172892d`(S5a·D1 적용, S5 보류), `.env` 기본값(`SPARK_MAX_OFFSETS_PER_TRIGGER=65000`, Spark `cpus` 4, `mem_limit` 3g). 단일 생성기(`PRODUCER_WORKERS=1`). Spark는 새 체크포인트 `/opt/spark/checkpoints/daily-20261123`·`latest`로 다시 만들고 첫 배치 성공을 확인한 뒤 생성기를 시작했다. 샘플러는 [run_spark_mem.sh](../measurements/run_spark_mem.sh)다. Kafka UI는 껐다. Grafana는 생성기 시작 2분 뒤(14:10:03 UTC, 워밍업 구간 안)부터 켜 두었다.
 - 실행: 2026-11-23 23:08:07~2026-11-24 00:08:07 KST(생성기 기준 3,600초). 생성기 run_id `73ac328ce5914b5cb801654bc0fd1a48`, Spark run_id `1e18e2c0-8b54-4951-b34f-05985bc297b1`.
-- 원자료: [2026-11-24-spark-daily.json](../measurements/2026-11-24-spark-daily.json)(`analyze_profile.py` 출력, 자원 기록 포함). `docker stats` 첫 표본의 값 없는 줄(`--`) 2개는 지우고 분석했다. Grafana 캡처(23:07:30~00:09:30 KST): [파이프라인 운영](../../images/2026-11-24-spark-daily/pipeline.png), [주문 현황](../../images/2026-11-24-spark-daily/orders.png).
+- 원자료: [2026-11-24-spark-daily.json](../measurements/2026-11-24-spark-daily.json)(`analyze_profile.py` 출력, 자원 기록 포함). `docker stats` 첫 표본의 값 없는 줄(`--`) 2개는 지우고 분석했다. Grafana 캡처(23:07:30~00:09:30 KST): [파이프라인 운영](../../images/captures/2026-11-24-spark-daily/pipeline.png), [주문 현황](../../images/captures/2026-11-24-spark-daily/orders.png).
 
-**판정: 미충족.** 11개 구간 중 7개가 평시 기준 하나 이상을 넘었다. backlog는 전 구간 0이고 종단 간 p99는 전 구간 10초 이하다. 미충족은 짧은 정지 몇 번 때문이다. 구간 배치가 29~149개라 p99가 사실상 최댓값이 되므로, 배치 하나만 튀어도 구간 판정이 실패한다.
+**판정: 미충족.** 11개 구간 중 6개가 평시 기준 중 하나 이상을 충족하지 못했다. backlog는 전 구간 0이고 E2E p99는 전 구간 10초 이하다. 미충족은 짧은 정지 몇 번 때문이다. 구간 배치가 29~149개라 p99가 사실상 최댓값이 되므로, 배치 하나만 튀어도 구간 판정이 실패한다.
 
-| 구간 | 목표 EPS | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | backlog 최대 | 종단 간 p99 / 최대 | 판정 |
+| 구간 | 목표 EPS | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | backlog 최대 | E2E p99 / 최대 | 판정 |
 | --- | ---: | ---: | ---: | --- | ---: | ---: | --- | --- |
 | 00-02 | 1,500 | 1,499 | **98.9%** | 1,068 / 1,529ms | 0 | 0 | 5.81 / 6.13초 | 전송 미달 |
 | 02-06 | 800 | 800 | 99.5% | 768 / 1,544ms | 0 | 0 | 5.57 / 6.21초 | 통과 |
@@ -1617,18 +1617,18 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 - 조건: 커밋 `cc415d2`. 실행 전에 Kafka·ClickHouse·Spark·Grafana를 정지했다가 다시 시작했다. Spark 체크포인트는 `/opt/spark/checkpoints/daily2-20261124`·`latest`다. 단일 생성기, `.env` 기본값이다. daily와 다른 점은 `host-monitor`가 켜져 있고 Grafana가 생성기 시작 전부터 켜져 있었다는 것이다.
 - 실행: 2026-11-24 00:45:27~01:45:27 KST. 생성기 run_id `6b5c70c2492a40ed885fe9719d08a9ca`, Spark run_id `8ef78151-942f-4275-8029-f4e963804d46`.
-- 원자료: [2026-11-24-spark-daily2.json](../measurements/2026-11-24-spark-daily2.json)(`analyze_profile.py`), [2026-11-24-spark-daily2-host1s.json](../measurements/2026-11-24-spark-daily2-host1s.json)(`host_1s_summary.py`). Grafana 캡처(00:45:00~01:46:30 KST): [파이프라인 운영](../../images/2026-11-24-spark-daily2/pipeline.png), [주문 현황](../../images/2026-11-24-spark-daily2/orders.png).
+- 원자료: [2026-11-24-spark-daily2.json](../measurements/2026-11-24-spark-daily2.json)(`analyze_profile.py`), [2026-11-24-spark-daily2-host1s.json](../measurements/2026-11-24-spark-daily2-host1s.json)(`host_1s_summary.py`). Grafana 캡처(00:45:00~01:46:30 KST): [파이프라인 운영](../../images/captures/2026-11-24-spark-daily2/pipeline.png), [주문 현황](../../images/captures/2026-11-24-spark-daily2/orders.png).
 
 **판정: 미충족.** 11개 구간 중 8개가 기준을 넘었다. daily보다 ACK 미달 구간이 많다. backlog는 전 구간 0이다.
 
-| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | 종단 간 p99 / 최대 | 판정 |
+| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | E2E p99 / 최대 | 판정 |
 | --- | ---: | ---: | --- | ---: | --- | --- |
 | 00-02 | 1,498 | 99.4% | 1,153 / 2,098ms | 0 | 5.89 / 6.86초 | 통과 |
 | 02-06 | 800 | 99.3% | 793 / 992ms | 0 | 5.59 / 5.81초 | 통과 |
 | 06-08 | 1,999 | 99.7% | 1,132 / 1,753ms | 0 | 5.88 / 6.27초 | 통과 |
 | 08-10 | 3,472 | **96.7%** | 1,543 / 2,148ms | 0 | 6.24 / 6.79초 | 전송 미달 |
 | 10-12 | 4,987 | **98.7%** | 1,929 / 2,849ms | 0 | 6.63 / 7.52초 | 전송 미달 |
-| 12-13 | 6,399 | **96.6%** | 2,411 / **6,852ms** | 1 | **10.01** / 11.48초 | 전송·트리거·종단 간 미달 |
+| 12-13 | 6,399 | **96.6%** | 2,411 / **6,852ms** | 1 | **10.01** / 11.48초 | 전송·트리거·E2E 미달 |
 | 13-18 | 4,959 | **97.6%** | 1,949 / **4,087ms** | 1 | 6.99 / 11.21초 | 전송·트리거 미달 |
 | 18-20 | 5,976 | **97.3%** | 2,207 / **4,302ms** | 0 | 6.99 / 8.67초 | 전송·트리거 미달 |
 | 20-22 | 7,453 | **96.0%** | 2,603 / **3,760ms** | 0 | 7.12 / 7.89초 | 전송·트리거 미달 |
@@ -1677,15 +1677,15 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 - 조건: 커밋 `ff558c6`(`b1a85f1` 묶음 INSERT 포함). 나머지는 [기준 재실행](#daily-기준-재실행-1초-커널-계측-2026-11-24)과 같다. 스택을 정지했다가 다시 시작했고, `host-monitor`·Grafana·1초 샘플러를 켰다. Spark 체크포인트는 `/opt/spark/checkpoints/daily4-20261124`·`latest`다.
 - 실행: 2026-11-24 10:07:55~11:07:55 KST. 생성기 run_id `727cc305f5d64edfbad88d7ac11b2fa5`, Spark run_id `be529b40-903f-45cf-b0b6-59e3a41efb35`.
-- 원자료: [2026-11-24-spark-daily4.json](../measurements/2026-11-24-spark-daily4.json), [2026-11-24-spark-daily4-host1s.json](../measurements/2026-11-24-spark-daily4-host1s.json). Grafana 캡처(10:07:30~11:09:00 KST): [파이프라인 운영](../../images/2026-11-24-spark-daily4/pipeline.png), [주문 현황](../../images/2026-11-24-spark-daily4/orders.png).
+- 원자료: [2026-11-24-spark-daily4.json](../measurements/2026-11-24-spark-daily4.json), [2026-11-24-spark-daily4-host1s.json](../measurements/2026-11-24-spark-daily4-host1s.json). Grafana 캡처(10:07:30~11:09:00 KST): [파이프라인 운영](../../images/captures/2026-11-24-spark-daily4/pipeline.png), [주문 현황](../../images/captures/2026-11-24-spark-daily4/orders.png).
 - 적용 확인: 실행 시작 후 30초 동안 `producer_stats` 새 part가 4개(23행)였다. 묶기 전에는 30초에 30개였다.
 
-**판정: 미충족(11개 구간 중 4개 미달).** 기준 재실행(8개 미달)과 첫 daily(7개 미달)보다 적다. IO 압력 정지는 이 실행에서 사라졌다. 남은 미달 4개 중 2개는 `host-monitor` 틱 간격이 2초 이상으로 늘어난 구간이다([VM 지연 원인 조사](#daily4-vm-지연-원인-조사-2026-11-24)).
+**판정: 미충족(11개 구간 중 4개 미달).** 기준 재실행(8개 미달)과 첫 daily(6개 미달)보다 적다. IO 압력 정지는 이 실행에서 사라졌다. 남은 미달 4개 중 2개는 `host-monitor` 틱 간격이 2초 이상으로 늘어난 구간이다([VM 지연 원인 조사](#daily4-vm-지연-원인-조사-2026-11-24)).
 
-| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | 종단 간 p99 / 최대 | 판정 |
+| 구간 | 생성 EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | E2E p99 / 최대 | 판정 |
 | --- | ---: | ---: | --- | ---: | --- | --- |
 | 00-02 | 1,476 | **98.8%** | 1,706 / **5,936ms** | 1 | 7.46 / 9.63초 | 전송·트리거 미달(감지기 틱 지연) |
-| 02-06 | 797 | 99.8% | 930 / **6,652ms** | 2 | **10.06** / 15.42초 | 트리거·종단 간 미달(감지기 틱 지연) |
+| 02-06 | 797 | 99.8% | 930 / **6,652ms** | 2 | **10.06** / 15.42초 | 트리거·E2E 미달(감지기 틱 지연) |
 | 06-08 | 2,000 | 99.7% | 1,114 / 1,780ms | 0 | 5.78 / 6.26초 | 통과 |
 | 08-10 | 3,499 | 100% | 1,576 / 2,545ms | 0 | 6.18 / 6.85초 | 통과 |
 | 10-12 | 4,987 | 99.7% | 2,008 / 2,900ms | 0 | 6.66 / 7.79초 | 통과 |
@@ -1786,7 +1786,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 - 원자료:
   - [2026-11-24-spark-daily5.json](../measurements/2026-11-24-spark-daily5.json), [2026-11-24-spark-daily5-host1s.json](../measurements/2026-11-24-spark-daily5-host1s.json)
   - 감지기 기록 [2026-11-24-daily5-ticks/](../measurements/2026-11-24-daily5-ticks/). `tick_container.txt`·`tick_wsl.txt`의 줄 형식은 `<UTC> <벽시계 간격 ms> <uptime 간격 ms>`이고, `tick_hostmon.txt`는 `<UTC> <간격 ms>`다.
-  - Grafana 캡처(12:38:40~13:40:10 KST): [파이프라인 운영](../../images/2026-11-24-spark-daily5/pipeline.png), [주문 현황](../../images/2026-11-24-spark-daily5/orders.png)
+  - Grafana 캡처(12:38:40~13:40:10 KST): [파이프라인 운영](../../images/captures/2026-11-24-spark-daily5/pipeline.png), [주문 현황](../../images/captures/2026-11-24-spark-daily5/orders.png)
 
 **감지기 비교 결과**
 
@@ -1809,7 +1809,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 **부하 판정: 미충족(11개 구간 중 6개 미달)**
 
-| 구간 | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | 종단 간 p99 / 최대 | 판정 |
+| 구간 | ACK p95 100ms 이내 | 트리거 평균 / p99 | 5초 초과 | E2E p99 / 최대 | 판정 |
 | --- | ---: | --- | ---: | --- | --- |
 | 00-02 | 100% | 1,040 / 1,494ms | 0 | 5.74 / 6.12초 | 통과 |
 | 02-06 | **98.8%** | 794 / 1,097ms | 0 | 5.60 / 5.99초 | 전송 미달 |
@@ -1821,7 +1821,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 | 18-20 | **98.0%** | 2,093 / **3,985ms** | 0 | 6.67 / 7.25초 | 전송·트리거 미달 |
 | 20-22 | **96.7%** | 2,524 / **5,557ms** | 1 | 7.15 / 8.64초 | 전송·트리거 미달 |
 | 22-23 | **98.7%** | 1,487 / 1,833ms | 0 | 6.16 / 6.48초 | 전송 미달 |
-| 23-24 | **93.0%** | 1,931 / **13,271ms** | 2 | **16.47** / 17.83초 | 전송·트리거·종단 간 미달(위 지연 묶음) |
+| 23-24 | **93.0%** | 1,931 / **13,271ms** | 2 | **16.47** / 17.83초 | 전송·트리거·E2E 미달(위 지연 묶음) |
 
 - 공통 기준은 통과했다. 생성 = ACK 13,752,648건, 정상 주문 생성 11,689,579건 = silver 행 수 = 고유 `event_id` 수다. Spark 시도 721개가 모두 성공했고 재시작은 0회다. `producer_stats` INSERT 1건(2행)이 04:36:59 지연 때 timeout으로 실패했다.
 - [daily 비교 실행](#daily-비교-실행-producer_stats-5초-묶음-2026-11-24)에서 사라졌던 IO 압력이 다시 나타났다. VM `io.pressure` full > 20%인 배치가 느린 배치 4/9, 정상 배치 27/711이다. 그래서 묶음 INSERT가 IO 압력 정지를 없앤다는 앞의 해석은 재현되지 않았다. 실행마다 차이가 커서 실행 1회씩으로는 효과를 판정할 수 없다.
@@ -1836,7 +1836,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 - 프로파일: `daily.csv`의 구간 길이만 절반으로 줄인 임시 프로파일(1,800초, EPS·순서 동일, [사본](../measurements/2026-11-24-daily6-ticks/profile-daily-half.csv))이다. 75초 구간(12-13, 22-23, 23-24)은 배치가 약 15개뿐이라 p99 판정이 원래 daily보다 덜 엄밀하다. 분석기는 파일 이름으로 종류를 정하므로 `daily.csv` 이름의 사본으로 분석했다.
 - 조건: 나머지는 [감지기 비교 실행](#감지기-비교-실행-2026-11-24)과 같다(스택 재시작, 1초 샘플러, 감지기 3개). Spark 체크포인트는 `daily6-20261124`다.
 - 실행: 2026-11-24 14:01:29~14:31:29 KST. 생성기 run_id `b028a1b4d0b44eb79ba3777e906ac75c`, Spark run_id `206a084d-4ca0-4229-b0b0-ccf617ed72ce`.
-- 원자료: [2026-11-24-spark-daily6.json](../measurements/2026-11-24-spark-daily6.json), [2026-11-24-spark-daily6-host1s.json](../measurements/2026-11-24-spark-daily6-host1s.json), 감지기 기록 [2026-11-24-daily6-ticks/](../measurements/2026-11-24-daily6-ticks/). Grafana 캡처(14:01:00~14:32:30 KST): [파이프라인 운영](../../images/2026-11-24-spark-daily6/pipeline.png), [주문 현황](../../images/2026-11-24-spark-daily6/orders.png).
+- 원자료: [2026-11-24-spark-daily6.json](../measurements/2026-11-24-spark-daily6.json), [2026-11-24-spark-daily6-host1s.json](../measurements/2026-11-24-spark-daily6-host1s.json), 감지기 기록 [2026-11-24-daily6-ticks/](../measurements/2026-11-24-daily6-ticks/). Grafana 캡처(14:01:00~14:32:30 KST): [파이프라인 운영](../../images/captures/2026-11-24-spark-daily6/pipeline.png), [주문 현황](../../images/captures/2026-11-24-spark-daily6/orders.png).
 
 **감지기 비교**
 
@@ -1850,7 +1850,7 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 **부하 판정: 미충족(11개 구간 중 3개 미달)**
 
-| 구간 | ACK p95 100ms 이내 | 트리거 평균 / p99 | 종단 간 p99 / 최대 | 판정 |
+| 구간 | ACK p95 100ms 이내 | 트리거 평균 / p99 | E2E p99 / 최대 | 판정 |
 | --- | ---: | --- | --- | --- |
 | 00-02 | 100% | 1,127 / 1,454ms | 5.81 / 6.08초 | 통과 |
 | 02-06 | 100% | 870 / 1,321ms | 5.66 / 6.06초 | 통과 |
@@ -1906,11 +1906,11 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
   - 실행 1회의 비교이므로 VM 지연 같은 외부 요인이 있으면 판정을 보류한다.
 - 결과에 따라 [PRD 02 Kafka 자원](02-kafka-ingestion.md)의 `cpus`를 갱신한다.
 - 실행: 커밋 `c14c673`, 2026-11-24 14:52:49~15:22:49 KST. 생성기 run_id `2d638dda1f564e3b9904dac618c35991`, Spark run_id `bbf949c0-7984-49aa-b4c1-161e747bf0ca`.
-- 원자료: [2026-11-24-spark-daily7.json](../measurements/2026-11-24-spark-daily7.json), [2026-11-24-spark-daily7-host1s.json](../measurements/2026-11-24-spark-daily7-host1s.json), 감지기 기록 [2026-11-24-daily7-ticks/](../measurements/2026-11-24-daily7-ticks/). Grafana 캡처(14:52:20~15:23:50 KST): [파이프라인 운영](../../images/2026-11-24-spark-daily7/pipeline.png), [주문 현황](../../images/2026-11-24-spark-daily7/orders.png).
+- 원자료: [2026-11-24-spark-daily7.json](../measurements/2026-11-24-spark-daily7.json), [2026-11-24-spark-daily7-host1s.json](../measurements/2026-11-24-spark-daily7-host1s.json), 감지기 기록 [2026-11-24-daily7-ticks/](../measurements/2026-11-24-daily7-ticks/). Grafana 캡처(14:52:20~15:23:50 KST): [파이프라인 운영](../../images/captures/2026-11-24-spark-daily7/pipeline.png), [주문 현황](../../images/captures/2026-11-24-spark-daily7/orders.png).
 
 **부하 판정: 충족(11개 구간 모두 통과)**
 
-| 구간 | ACK p95 100ms 이내 | 트리거 평균 / p99 | 종단 간 p99 / 최대 | 이전(Kafka 2) |
+| 구간 | ACK p95 100ms 이내 | 트리거 평균 / p99 | E2E p99 / 최대 | 이전(Kafka 2) |
 | --- | ---: | --- | --- | --- |
 | 00-02 | 100% | 1,044 / 1,218ms | 5.78 / 5.88초 | 통과 |
 | 02-06 | 100% | 833 / 1,046ms | 5.65 / 5.90초 | 통과 |
@@ -1953,11 +1953,11 @@ S5a와 D1을 적용한 상태에서 `step.csv`를 실행했다. 새 checkpoint `
 
 - 조건: 커밋 `8ab91b9`(Kafka `cpus` 3, `host-monitor` `cpus` 1.0, `producer_stats` 5초 묶음). 프로파일은 `daily.csv`(3,600초) 원본이다. 나머지는 [Kafka `cpus` 3 단독 비교](#kafka-cpus-3-단독-비교-2026-11-24)와 같다(스택 재시작, 1초 샘플러, 감지기 3개). Spark 체크포인트는 `daily8-20261124`다.
 - 실행: 2026-11-24 15:38:25~16:38:25 KST. 생성기 run_id `616740bfd2d94611a13fdb80aa29b594`, Spark run_id `39785c2e-cc38-418f-b999-213c42e59c01`.
-- 원자료: [2026-11-24-spark-daily8.json](../measurements/2026-11-24-spark-daily8.json), [2026-11-24-spark-daily8-host1s.json](../measurements/2026-11-24-spark-daily8-host1s.json), 감지기 기록 [2026-11-24-daily8-ticks/](../measurements/2026-11-24-daily8-ticks/). Grafana 캡처(15:38:00~16:39:30 KST): [파이프라인 운영](../../images/2026-11-24-spark-daily8/pipeline.png), [주문 현황](../../images/2026-11-24-spark-daily8/orders.png).
+- 원자료: [2026-11-24-spark-daily8.json](../measurements/2026-11-24-spark-daily8.json), [2026-11-24-spark-daily8-host1s.json](../measurements/2026-11-24-spark-daily8-host1s.json), 감지기 기록 [2026-11-24-daily8-ticks/](../measurements/2026-11-24-daily8-ticks/). Grafana 캡처(15:38:00~16:39:30 KST): [파이프라인 운영](../../images/captures/2026-11-24-spark-daily8/pipeline.png), [주문 현황](../../images/captures/2026-11-24-spark-daily8/orders.png).
 
 **부하 판정: 충족(11개 구간 모두 통과)**
 
-| 구간 | EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | 종단 간 p99 / 최대 | 판정 |
+| 구간 | EPS | ACK p95 100ms 이내 | 트리거 평균 / p99 | E2E p99 / 최대 | 판정 |
 | --- | ---: | ---: | --- | --- | --- |
 | 00-02 | 1,500 | 100% | 1,021 / 1,605ms | 5.78 / 6.44초 | 통과 |
 | 02-06 | 800 | 100% | 771 / 1,033ms | 5.57 / 6.01초 | 통과 |
@@ -1985,7 +1985,7 @@ Kafka `cpus`를 3으로 올린 뒤 [스파이크 판정](#스파이크-판정-�
 
 - 조건: 커밋 `f2d2ba5`. `spike.csv`를 생성기 1개, `PRODUCER_WORKERS=2`로 실행했다(이전 판정은 `spike-half.csv` 생성기 2개, 같은 구간·EPS). 나머지는 [daily 전체 확인 재실행](#daily-전체-확인-재실행-kafka-cpus-3-2026-11-24)과 같다(스택 재시작, 1초 샘플러, 감지기 3개). Spark 체크포인트는 `spike3-20261124`다.
 - 실행: 2026-11-24 16:48:42~17:01:12 KST. 생성기 run_id `9a2e8f4ad2314ca3b0af74cbbb4f56e3`·`fc60d8ea10ca4e9f8101f0a766860112`, Spark run_id `b5390015-3753-4fd4-b71d-a482fbd4fe26`.
-- 원자료: [2026-11-24-spark-spike3.json](../measurements/2026-11-24-spark-spike3.json), [2026-11-24-spark-spike3-host1s.json](../measurements/2026-11-24-spark-spike3-host1s.json), 감지기 기록 [2026-11-24-spike3-ticks/](../measurements/2026-11-24-spike3-ticks/). Grafana 캡처(16:48:10~17:02:10 KST): [파이프라인 운영](../../images/2026-11-24-spark-spike3/pipeline.png), [주문 현황](../../images/2026-11-24-spark-spike3/orders.png).
+- 원자료: [2026-11-24-spark-spike3.json](../measurements/2026-11-24-spark-spike3.json), [2026-11-24-spark-spike3-host1s.json](../measurements/2026-11-24-spark-spike3-host1s.json), 감지기 기록 [2026-11-24-spike3-ticks/](../measurements/2026-11-24-spike3-ticks/). Grafana 캡처(16:48:10~17:02:10 KST): [파이프라인 운영](../../images/captures/2026-11-24-spark-spike3/pipeline.png), [주문 현황](../../images/captures/2026-11-24-spark-spike3/orders.png).
 - 생성기 시작 직후 librdkafka 경고 2줄(`Failed to acquire idempotence PID ... Coordinator load in progress: retrying`)이 있었다. 재시작 직후 브로커 코디네이터 적재 중이라 재시도한 것이며 전송 실패는 0이다.
 
 **판정: 스파이크 기준 1~3과 공통 기준 통과.**
@@ -1993,14 +1993,14 @@ Kafka `cpus`를 3으로 올린 뒤 [스파이크 판정](#스파이크-판정-�
 | 기준 | 이번(Kafka 3) | 이전(Kafka 2, 2026-11-23) | 판정 |
 | --- | --- | --- | --- |
 | 1. 생성 | spike 11,951 EPS(−0.4%), ACK 11,951 EPS | 11,890 / 11,821 EPS | 통과 |
-| 2. 누적 | spike 트리거 평균 4,116ms, p99·최대 6,090ms, 5초 초과 2개. 실처리량 14,522 EPS. backlog 최대 6,829건(batch 66) → 2,270건 → 0. 종단 간 p99 9.33초, 최대 10.53초 | 트리거 p99 8,826ms, backlog 최대 17,555건, 종단 간 p99 12.17초, 최대 13.96초 | 기록 |
+| 2. 누적 | spike 트리거 평균 4,116ms, p99·최대 6,090ms, 5초 초과 2개. 실처리량 14,522 EPS. backlog 최대 6,829건(batch 66) → 2,270건 → 0. E2E p99 9.33초, 최대 10.53초 | 트리거 p99 8,826ms, backlog 최대 17,555건, E2E p99 12.17초, 최대 13.96초 | 기록 |
 | 3. 회복 | spike 종료 뒤 첫 배치(452.5초)에서 회복, 2.5초 | 2.1초 | 통과 |
 | 공통 1. 건수 | 생성 = ACK 4,789,531. 정상 주문 = silver 행 수 = 고유 `event_id` 4,070,257 | 동일 기준 통과 | 통과 |
 | 공통 2. 오류 | Spark 시도 151개 모두 성공, 재시작 0회, 생성기 종료 코드 0·0, `producer_stats` 손실 0 | 통과 | 통과 |
 
 구간별 요약:
 
-| 구간 | 생성 EPS | 트리거 평균 / p99 | backlog 최대 | 종단 간 p99 / 최대 | ACK p95 100ms 이내 |
+| 구간 | 생성 EPS | 트리거 평균 / p99 | backlog 최대 | E2E p99 / 최대 | ACK p95 100ms 이내 |
 | --- | ---: | --- | ---: | --- | ---: |
 | warmup(120초 이후) | 4,996 | 1,979 / 2,466ms | 0 | 6.67 / 7.53초 | 100% |
 | spike | 11,951 | 4,116 / 6,090ms | 6,829 | 9.33 / 10.53초 | 100%(이전 97.0%) |

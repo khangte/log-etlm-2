@@ -234,7 +234,7 @@
 - 단위 테스트: 설정 검증(0 이하, stdout·file에서 2 이상, worker에 0 EPS·0건이 배정되는 값 거부), EPS·구간 eps·최대 건수·seed 분배(`step.csv` × 3 worker의 구간별 합 = 원래 eps), stderr `worker` 키. 생성기 테스트 52개 통과.
 - Kafka 연동(kafka·clickhouse만 기동, Spark 없음): `PRODUCER_WORKERS=2`, `PRODUCER_EPS=2001`, `PRODUCER_MAX_EVENTS=20001`로 실행했다. worker 0/1이 목표 1,001/1,000 EPS로 10,001/10,000건을 보냈고 ACK도 같았다. 종료 코드 0. `ops.producer_stats`에는 run_id 2개가 각각 11행, `generated`·`acked` 합계 10,001/10,000건으로 기록됐다.
 - 종료 처리: 무제한 실행 중 부모에 SIGINT를 보내자 두 worker가 `interrupted`로 끝났고 종료 코드는 130이었다. Kafka가 꺼진 상태에서는 두 worker가 `output_error`로 끝났고 종료 코드는 1이었다.
-- 부하 확인(5분, 2026-11-23 12:03:39~12:08:39 UTC): `step.csv`의 구간을 50초씩 줄인 임시 프로파일(5k/8k/9k/10k/11k/12k)을 `PRODUCER_WORKERS=2` 생성기 1개로 실행했다. 전체 스택이며, Spark는 새 체크포인트 `workers2-5min-20261123`·`latest`로 부하 약 20초 전에 올렸다. 원자료 [2026-11-23-generator-workers2.json](../measurements/2026-11-23-generator-workers2.json), Grafana 캡처 [파이프라인 운영](../../images/2026-11-23-generator-workers2/pipeline.png)·[주문 현황](../../images/2026-11-23-generator-workers2/orders.png).
+- 부하 확인(5분, 2026-11-23 12:03:39~12:08:39 UTC): `step.csv`의 구간을 50초씩 줄인 임시 프로파일(5k/8k/9k/10k/11k/12k)을 `PRODUCER_WORKERS=2` 생성기 1개로 실행했다. 전체 스택이며, Spark는 새 체크포인트 `workers2-5min-20261123`·`latest`로 부하 약 20초 전에 올렸다. 원자료 [2026-11-23-generator-workers2.json](../measurements/2026-11-23-generator-workers2.json), Grafana 캡처 [파이프라인 운영](../../images/captures/2026-11-23-generator-workers2/pipeline.png)·[주문 현황](../../images/captures/2026-11-23-generator-workers2/orders.png).
 
   | 구간 | 생성 EPS(두 worker 합, 경계 1초 제외) | 목표 대비 | worker CPU 평균(각각) | Spark 트리거 평균 / 최대 | backlog 최대 |
   | --- | ---: | ---: | ---: | ---: | ---: |
@@ -261,10 +261,10 @@
 
 - 서비스 사이의 시각 비교는 UTC 기준으로 하며 호스트 시계를 동기화한다. 저장 시각은 밀리초 이상의 정밀도를 사용하되 기존 `event_timestamp`의 밀리초 형식은 유지한다. 시계 차이로 음수 지연이 나오면 0으로 숨기지 않고 측정 이상으로 집계한다.
 - 같은 프로세스 안의 소요시간은 `perf_counter_ns()` 같은 단조 증가 시계의 차이로 측정한다. 서로 다른 프로세스의 단조 증가 시계 값은 비교하지 않는다.
-- 단계 내부 처리시간과 단계 사이 대기·전달 지연을 구분한다. 서로 겹치는 구간을 합산해 종단 간 지연으로 표시하지 않는다.
+- 단계 내부 처리시간과 단계 사이 대기·전달 지연을 구분한다. 서로 겹치는 구간을 합산해 E2E 지연으로 표시하지 않는다.
 - 지표에는 측정 구간, 단위(ms), 건수, 실패 건수와 평균·p50·p95·p99를 기록한다. 집계 구간과 샘플링 여부를 명시하며 구간별 백분위수를 단순 평균하지 않는다. 지연 목표값은 각 단계 착수 시 확정한다.
 - 원본 JSON에 측정용 필드를 추가하거나 기존 시각을 덮어쓰지 않는다. Kafka 메타데이터, 후속 저장 컬럼, 별도 운영 지표를 사용한다. `event_id`, 배치 ID 등은 상관관계 확인용이며 시계열 지표의 개별 라벨로 사용하지 않는다.
-- 재시도는 시도별 소요시간·실패와 최종 성공까지의 시간을 구분한다. 종단 간 지연은 최초 생성 시각을 유지한다. 정상 주문·health_check·불량 로그의 처리 경로와 측정 건수를 구분한다.
+- 재시도는 시도별 소요시간·실패와 최종 성공까지의 시간을 구분한다. E2E 지연은 최초 생성 시각을 유지한다. 정상 주문·health_check·불량 로그의 처리 경로와 측정 건수를 구분한다.
 
 ### 생성기 측정 위치
 
@@ -273,7 +273,7 @@
 | 생성·직렬화 시간 | 이벤트 생성 호출 직전 | 최종 UTF-8 바이트 반환 직후 | 필드 선택·객체 구성·직렬화·불량 주입을 포함하며 속도 제어 대기는 제외 |
 | 출력 호출 시간(v1 범위 제외) | stdout·파일 쓰기 직전 | 쓰기 호출 반환 직후 | 출력 버퍼에 기록하는 데 걸린 시간. 디스크 영속화 시간이 아님 |
 
-- 기존 `event_timestamp`는 이벤트 생성 시점이며 종단 간 지연의 기준이다. 생성·직렬화 시간은 별도 단조 증가 시계로 측정한다.
+- 기존 `event_timestamp`는 이벤트 생성 시점이며 E2E 지연의 기준이다. 생성·직렬화 시간은 별도 단조 증가 시계로 측정한다.
 - 이벤트별 측정값을 stdout 페이로드에 섞지 않고 상태 지표로 집계한다. flush 소요시간은 개별 쓰기와 분리한다.
 - Kafka 전송 측정은 [Kafka PRD](02-kafka-ingestion.md)에 따른다.
 - 4단계부터 Kafka 출력 모드의 생성·직렬화 시간과 Producer 지표를 1초 구간 통계로 집계해 ClickHouse `ops.producer_stats`에 기록한다. 11월 24일부터 1초 행을 최대 5초 모아 한 번에 전송하며, 종료 시 남은 행을 전송한다. 방식과 실패 정책은 [ClickHouse 운영 지표 저장](04-clickhouse-storage.md#운영-지표-저장)을 따른다.

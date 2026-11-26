@@ -438,7 +438,7 @@ JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한�
 
 샘플 이벤트를 ClickHouse에서 처음 발견한 시각(`first_observed_at`)으로 생성 → 조회 가능 지연을 재는 샘플러와 `ops.visibility_samples`는 v1 범위에서 제외한다.
 
-- 선택 근거: v1 운영 지표의 우선 목적은 병목 구간 판별이다. 샘플러는 종단 간 지연 하나를 관측할 뿐 어느 구간이 원인인지 알려주지 않는다. 구간 판별은 위 3개 테이블과 `system.query_log`·`system.part_log`로 충분하다. 샘플러는 별도 서비스로 Kafka 소비와 ClickHouse 조회가 남은 CPU 예산을 쓰고 구현 범위가 가장 크다.
+- 선택 근거: v1 운영 지표의 우선 목적은 병목 구간 판별이다. 샘플러는 E2E 지연 하나를 관측할 뿐 어느 구간이 원인인지 알려주지 않는다. 구간 판별은 위 3개 테이블과 `system.query_log`·`system.part_log`로 충분하다. 샘플러는 별도 서비스로 Kafka 소비와 ClickHouse 조회가 남은 CPU 예산을 쓰고 구현 범위가 가장 크다.
 - 비교한 대안: 4단계에 포함하면 완료 기준의 조회 가능 지연을 실측할 수 있지만 위 비용이 든다. `ingested_at - event_timestamp`는 적재 시각을 조회 가능 시각으로 간주하지 않는다는 원칙에 따라 조회 가능 지연으로 표시하지 않는다.
 - 제약: 대시보드는 생성 → 조회 가능 지연을 표시하지 않는다. 데이터 최신성(현재 시각 − 최신 `event_timestamp`)은 [Grafana PRD](05-grafana-dashboard.md#처리지연-측정과-표시)대로 표시하며 이벤트별 지연과 구분한다. 필요해지면 이 절을 갱신하고 샘플러를 추가한다.
 

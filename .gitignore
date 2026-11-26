@@ -225,3 +225,5 @@ __marimo__/
 docs-ignore/
 AGENTS.md
 CLAUDE.md
+
+*.drawio

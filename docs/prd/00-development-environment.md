@@ -87,13 +87,13 @@ apps/log_generator/
 - WSL에서 `docker version`과 `docker compose version`으로 연결 및 사용 가능 여부를 확인한다.
 - 앱 디렉터리에서 `uv sync`와 `uv run python --version`으로 환경을 재현한다.
 - 서비스는 해당 개발 단계에서 시작·종료·재시작을 검증한다.
-- 전체 통합 시 메모리 부족, 지속적인 swap 입출력, 처리량과 종단 간 지연을 확인한다.
+- 전체 통합 시 메모리 부족, 지속적인 swap 입출력, 처리량과 E2E 지연을 확인한다.
 - 전체 서비스 구동 가능 여부와 목표 성능 달성 여부를 구분해 기록한다.
 
 ### 환경 검증 결과 (2026-11-19)
 
 - 구동: Kafka·Kafka UI·Spark·ClickHouse·Grafana를 함께 띄운 상태에서 5,000 EPS 17분(5단계)·60분(진단) 실행이 끝까지 동작했다. 앱 환경은 각 단계에서 `uv sync`로 재현했다.
-- 목표 성능: [4단계 완료 기준](04-clickhouse-storage.md#완료-기준)을 통과했다. 종단 간 지연은 [개요](overview.md#v1-목표-판정-2026-11-19)를 따른다.
+- 목표 성능: [4단계 완료 기준](04-clickhouse-storage.md#완료-기준)을 통과했다. E2E 지연은 [개요](overview.md#v1-목표-판정-2026-11-19)를 따른다.
 - 메모리: 60분 실행 직후 WSL 사용 7,637MiB/11,963MiB(가용 4,326MiB), Spark 컨테이너 최대 약 2.34GiB/3GiB였다. OOM은 없었다.
 - swap 입출력: 이 실행에서는 측정하지 않았다. 11월 23일 후속 스파이크에서는 Kafka cgroup의 swap 입출력을 관측했다. [후속 측정](03-stream-processing.md#스파이크-재실행-대시보드-닫음-swap-in-기록-2026-11-23)
 - 로컬 환경 요인: WSL2 VM 전체 정지(60분에 1~2회, 약 15초)가 관측됐다([진단](../measurements/2026-11-19-spark-latency-spike-diagnosis.md)). Windows 쪽 원인은 확인하지 않았으며, 로컬 측정에서 지연이 튈 때는 생성기 상태 로그 공백으로 VM 정지 여부부터 가린다.

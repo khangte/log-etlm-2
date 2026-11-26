@@ -1,6 +1,6 @@
 # 시간대별 부하 프로파일
 
-- 상태: 완료 (완료 기준 1~8 충족. 2026-11-23 단일 생성기 튜닝 후 평시·지속 용량 충족, 생성기 2개로 [spike 통과](03-stream-processing.md#스파이크-판정-생성기-2개-2026-11-23)·[step 지속 용량 12,000 EPS](03-stream-processing.md#지속-용량-판정-생성기-2개-step-재측정-2026-11-23). 완료 기준 7 `daily.csv` 전체 확인은 2026-11-24 첫 실행에서 [미충족](03-stream-processing.md#daily-전체-확인-2026-11-24)(11개 구간 중 7개 미달)이었다. 원인 조사와 `producer_stats` 묶음 INSERT·`host-monitor` CPU 1.0·Kafka `cpus` 3 조정 뒤 [재실행](03-stream-processing.md#daily-전체-확인-재실행-kafka-cpus-3-2026-11-24)에서 11개 구간 모두 통과했다. 20-22 트리거 p99 3,485ms로 여유가 작고, VM 지연이 없는 실행 1회 근거다. Kafka `cpus` 3 뒤 `spike.csv`는 [재판정](03-stream-processing.md#스파이크-재판정-kafka-cpus-3-2026-11-24)에서 통과했다(Spark `memory.peak`가 `mem_limit`의 97.4%). `step.csv`는 다시 측정하지 않았다)
+- 상태: 완료 (완료 기준 1~8 충족. 2026-11-23 단일 생성기 튜닝 후 평시·지속 용량 충족, 생성기 2개로 [spike 통과](03-stream-processing.md#스파이크-판정-생성기-2개-2026-11-23)·[step 지속 용량 12,000 EPS](03-stream-processing.md#지속-용량-판정-생성기-2개-step-재측정-2026-11-23). 완료 기준 7 `daily.csv` 전체 확인은 2026-11-24 첫 실행에서 [미충족](03-stream-processing.md#daily-전체-확인-2026-11-24)(11개 구간 중 6개 미달)이었다. 원인 조사와 `producer_stats` 묶음 INSERT·`host-monitor` CPU 1.0·Kafka `cpus` 3 조정 뒤 [재실행](03-stream-processing.md#daily-전체-확인-재실행-kafka-cpus-3-2026-11-24)에서 11개 구간 모두 통과했다. 20-22 트리거 p99 3,485ms로 여유가 작고, VM 지연이 없는 실행 1회 근거다. Kafka `cpus` 3 뒤 `spike.csv`는 [재판정](03-stream-processing.md#스파이크-재판정-kafka-cpus-3-2026-11-24)에서 통과했다(Spark `memory.peak`가 `mem_limit`의 97.4%). `step.csv`는 다시 측정하지 않았다)
 - 적용 범위: 제품 v1 (6단계 상세 세팅 조정의 부하 모델·튜닝 목표·측정 부하)
 
 ## 목표
@@ -35,12 +35,12 @@
 
 | 상황 | 판정 프로파일 | 목표 |
 | --- | --- | --- |
-| 평시 (≤ 7,500 EPS) | `steady.csv`, `daily.csv` | 1초 구간의 99% 이상에서 ACK p95 ≤ 100ms. 배치 트리거 시간 p99 ≤ 3,500ms. 종단 간 지연 p99 ≤ 10초. backlog 증가 추세 없음 |
+| 평시 (≤ 7,500 EPS) | `steady.csv`, `daily.csv` | 1초 구간의 99% 이상에서 ACK p95 ≤ 100ms. 배치 트리거 시간 p99 ≤ 3,500ms. E2E 지연 p99 ≤ 10초. backlog 증가 추세 없음 |
 | 지속 용량 | `step.csv` | 10,000 EPS 단계까지 통과. 개별 배치가 5초를 넘어도 되지만 단계 동안 backlog가 쌓이지 않는다 |
 | 스파이크 | `spike.csv` | spike 구간 종료 후 60초 안에 backlog 0, Kafka → 콜백 p95가 warmup 구간 p95의 1.5배 이내로 회복. spike 중 지연은 기록만 한다 |
 | 공통 | 모든 프로파일 | 생성 = ACK, 정상 주문 생성 건수 = `silver.order_events` 적재 건수(`event_id` 고유 수 포함). 쿼리·출력·ClickHouse 쓰기 실패 0건, Spark 재시작 0회 |
 
-- 종단 간 지연은 `event_timestamp` → `silver.order_events.ingested_at`이다. 트리거 대기만으로 최대 5초가 들기 때문에 p99 10초 목표를 맞추려면 배치 처리시간을 줄여야 한다.
+- E2E 지연은 `event_timestamp` → `silver.order_events.ingested_at`이다. 트리거 대기만으로 최대 5초가 들기 때문에 p99 10초 목표를 맞추려면 배치 처리시간을 줄여야 한다.
 - 단일 생성기는 10,000 EPS까지 낼 수 있다(아래 초기 기준값). 단일 생성기 단계에서는 `step.csv`의 11,000·12,000 EPS 단계와 `spike.csv`를 참고값으로 기록한다. 이 둘은 2개 프로세스로 확장한 뒤 판정한다.
 
 ## 초기 기준값
@@ -54,7 +54,7 @@
 | Spark 처리 용량 | 약 10,300~11,100 EPS. 50,000건 배치 트리거 평균 4,840ms(단일 생성기) / 4,493ms(생성기 2개) | [로그 생성기 PRD](01-log-generator.md) 기준 11 항목 4, [상한 확인 측정 2차](#상한-확인-프로파일-측정-2차-ceiling-10000-eps-생성기-2개-spark-cpu-4-2026-11-19) |
 | Spark 배치 시간 근사 | 약 0.66초 + 행당 0.079ms. 입력 약 25,000건에서 2.6초, 50,000건에서 4.6~4.8초 | 단일 생성기 상한 확인 측정의 입력 크기별 평균에서 두 점으로 추정했다 |
 | 평시 피크 예상 배치 시간 | 7,500 EPS(배치 37,500건)에서 약 3.6초 | 위 근사식 추정. 목표 3,500ms의 경계다 |
-| 종단 간 지연 (5,000 EPS) | p99 7.72초, 최대 9.87초 | [v1 목표 판정](overview.md#v1-목표-판정-2026-11-19) |
+| E2E 지연 (5,000 EPS) | p99 7.72초, 최대 9.87초 | [v1 목표 판정](overview.md#v1-목표-판정-2026-11-19) |
 | 스파이크 회복 | 약 40~44초(생성기 2개, 배치 상한 55,000건) | [스파이크 측정 3차](#스파이크-프로파일-측정-3차-spike-12000-eps-배치-상한-55000건-2026-11-19) |
 
 ## 프로파일 정의
@@ -149,7 +149,7 @@ duration_sec,eps,label
 
 ### 이벤트 시각
 
-- `event_timestamp`는 기존처럼 실제 생성 시각(UTC)이다. 시뮬레이션 시각을 쓰면 종단 간 지연 측정이 깨지므로 반영하지 않는다.
+- `event_timestamp`는 기존처럼 실제 생성 시각(UTC)이다. 시뮬레이션 시각을 쓰면 E2E 지연 측정이 깨지므로 반영하지 않는다.
 
 ### 상태·통계·운영 지표
 
@@ -178,7 +178,7 @@ duration_sec,eps,label
 
 1. **생성·전송:** 구간 ACK EPS가 목표의 ±5% 이내이고, 구간 1초 행의 99% 이상에서 ACK p95가 100ms 이하다. 지연 SLO는 개별 구간이 아니라 비율로 판정한다(2026-11-19, 기준값 측정에서 300개 중 1개 초과로 실패한 뒤 변경).
 2. **배치 시간:** 구간 배치의 트리거 시간(`trigger_execution_ms`) p99가 3,500ms 이하다.
-3. **종단 간 지연:** 구간 이벤트의 p99가 10초 이하다. 10초 초과 건수를 기록한다.
+3. **E2E 지연:** 구간 이벤트의 p99가 10초 이하다. 10초 초과 건수를 기록한다.
 4. **누적:** backlog(`latest_offsets` 합 − `end_offsets` 합)가 구간 동안 증가 추세가 아니고, 0이 아닌 backlog는 다음 배치에서 0으로 돌아온다.
 
 ### 지속 용량 (`step.csv`)
@@ -192,7 +192,7 @@ duration_sec,eps,label
 ### 스파이크 (`spike.csv`)
 
 1. **생성:** spike 구간 생성 EPS가 12,000의 ±5% 이내다. 2개 프로세스로 실행하면 두 `run_id`의 합계로 본다. 못 미치면 이후 기준은 참고값이다.
-2. **누적:** spike 구간 backlog 최댓값과 spike 중 종단 간 지연 최댓값을 기록한다.
+2. **누적:** spike 구간 backlog 최댓값과 spike 중 E2E 지연 최댓값을 기록한다.
 3. **회복:** spike 종료 시각부터 backlog 0과 Kafka → 콜백 p95 ≤ warmup p95 × 1.5를 함께 만족하는 첫 배치까지가 60초 이하다.
 
 ### 공통
@@ -260,7 +260,7 @@ duration_sec,eps,label
 ### 스파이크 프로파일 측정 1차: spike 12,000 EPS, Spark CPU 3 (2026-11-19)
 
 - 실행: 14:19:36~14:34:36 KST(생성기 기준 900초). 생성기 run_id `fadfb58691664368a0b6e430e816d1a5`, Spark run_id `e0da87c3-764c-4b01-bcbd-96d2c113ca59`, 체크포인트 `/opt/spark/checkpoints/spike-20261119`, `latest`. Kafka·Spark·ClickHouse·Grafana·host-monitor 기동, Kafka UI 끔. 자원·설정은 `.env`·Compose 기본값.
-- 원자료: [2026-11-19-spike-profile.json](../measurements/2026-11-19-spike-profile.json). Grafana 캡처(14:19:00~14:35:30 KST): [파이프라인 운영](../../images/2026-11-19-spike-profile/pipeline.png), [주문 현황](../../images/2026-11-19-spike-profile/orders.png). 아래 경과 시각은 생성기 첫 1초 구간(05:19:36.663 UTC) 기준이다.
+- 원자료: [2026-11-19-spike-profile.json](../measurements/2026-11-19-spike-profile.json). Grafana 캡처(14:19:00~14:35:30 KST): [파이프라인 운영](../../images/captures/2026-11-19-spike-profile/pipeline.png), [주문 현황](../../images/captures/2026-11-19-spike-profile/orders.png). 아래 경과 시각은 생성기 첫 1초 구간(05:19:36.663 UTC) 기준이다.
 
 **판정: 기준 1(생성·전송) 미달. PRD에 따라 기준 2·3은 참고값으로 기록한다. 기준 4·5는 통과.**
 
@@ -272,7 +272,7 @@ duration_sec,eps,label
 | 4. 건수 대조 | 생성 = ACK 5,333,843. 정상 주문 생성 4,533,576 = `silver.order_events` 4,533,576행 = `event_id` 고유 수 | 통과 |
 | 5. 오류 | 생성기 출력 오류·전송 실패·지표 기록 실패 0. Spark 배치 167개 모두 `succeeded`, run_id 1개(재시작 0회) | 통과 |
 
-종단 간 지연(`event_timestamp` → `ingested_at`, 이벤트 생성 구간 기준):
+E2E 지연(`event_timestamp` → `ingested_at`, 이벤트 생성 구간 기준):
 
 | 구간 | 행 수 | p50 | p95 | p99 | 최대 | 10초 초과 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -315,7 +315,7 @@ duration_sec,eps,label
 ### 상한 확인 프로파일 측정 1차: ceiling 10,000 EPS, 생성기 1개, Spark CPU 4 (2026-11-19)
 
 - 실행: 16:01:08~16:16:08 KST(생성기 기준 900초). 생성기 run_id `f426680a18244a3abc6a854940b00925`(단일 프로세스, `spike-10k.csv`), Spark run_id `bf619504-1358-4ee4-bdbe-d4102b70a4b0`, 체크포인트 `/opt/spark/checkpoints/spike10k-20261119`, `latest`. [자원 조정](#자원-조정) 적용 후(Spark `cpus` 4, Grafana `mem_limit` 1g). 그 밖의 설정은 스파이크 1차 측정과 같다.
-- 원자료: [2026-11-19-ceiling-10k-1.json](../measurements/2026-11-19-ceiling-10k-1.json). Grafana 캡처(16:00:30~16:17:00 KST): [파이프라인 운영](../../images/2026-11-19-ceiling-10k-1/pipeline.png), [주문 현황](../../images/2026-11-19-ceiling-10k-1/orders.png). 경과 시각은 생성기 첫 1초 구간(07:01:08.262 UTC) 기준이다.
+- 원자료: [2026-11-19-ceiling-10k-1.json](../measurements/2026-11-19-ceiling-10k-1.json). Grafana 캡처(16:00:30~16:17:00 KST): [파이프라인 운영](../../images/captures/2026-11-19-ceiling-10k-1/pipeline.png), [주문 현황](../../images/captures/2026-11-19-ceiling-10k-1/orders.png). 경과 시각은 생성기 첫 1초 구간(07:01:08.262 UTC) 기준이다.
 
 **판정: 기준 1(생성·전송) 미달. 기준 2·3은 참고값이다. 기준 4·5는 통과.** 입력이 10,000 EPS에 닿지 않아 상한 처리 판정은 2차 측정으로 넘긴다.
 
@@ -327,7 +327,7 @@ duration_sec,eps,label
 | 4. 자원 | 아래 자원 사용 참고. Spark CPU 상한에 걸린 주기 20.0%(스파이크 1차 16.8%), 걸린 시간 96초(437초) | 기록 |
 | 5. 건수 대조·오류 | 생성 = ACK 5,148,901. 정상 주문 4,376,684 = `silver.order_events` 행 수 = `event_id` 고유 수. 출력 오류·전송 실패·지표 기록 실패 0. Spark 배치 179개 모두 `succeeded`, run_id 1개 | 통과 |
 
-종단 간 지연(`event_timestamp` → `ingested_at`, 이벤트 생성 구간 기준):
+E2E 지연(`event_timestamp` → `ingested_at`, 이벤트 생성 구간 기준):
 
 | 구간 | 행 수 | p50 | p95 | p99 | 최대 | 10초 초과 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -364,7 +364,7 @@ duration_sec,eps,label
 ### 상한 확인 프로파일 측정 2차: ceiling 10,000 EPS, 생성기 2개, Spark CPU 4 (2026-11-19)
 
 - 실행: 16:22:56~16:37:56 KST(생성기 기준 900초). 생성기 run_id `49d2aefb54974776ac120b632652fc97`·`e12dd79606e54b8ba1bf1d792e23b425`(2개 프로세스, 각각 `spike-10k-half.csv`), Spark run_id `ebc5877d-0e7c-401c-908c-0ebf1af3e5ad`, 체크포인트 `/opt/spark/checkpoints/spike10k-2-20261119`, `latest`. 1차 측정에서 바꾼 것은 생성기 프로세스 수와 Spark `memory.stat` 표본뿐이다.
-- 원자료: [2026-11-19-ceiling-10k-2.json](../measurements/2026-11-19-ceiling-10k-2.json). Grafana 캡처(16:22:25~16:39:00 KST): [파이프라인 운영](../../images/2026-11-19-ceiling-10k-2/pipeline.png), [주문 현황](../../images/2026-11-19-ceiling-10k-2/orders.png). 경과 시각은 두 생성기 중 첫 1초 구간(07:22:55.954 UTC) 기준이다.
+- 원자료: [2026-11-19-ceiling-10k-2.json](../measurements/2026-11-19-ceiling-10k-2.json). Grafana 캡처(16:22:25~16:39:00 KST): [파이프라인 운영](../../images/captures/2026-11-19-ceiling-10k-2/pipeline.png), [주문 현황](../../images/captures/2026-11-19-ceiling-10k-2/orders.png). 경과 시각은 두 생성기 중 첫 1초 구간(07:22:55.954 UTC) 기준이다.
 
 **판정: 기준 1·2·4·5 통과. 누적이 거의 없어 기준 3은 해당 없음.** Spark `cpus` 4에서 10,000 EPS를 지속 처리한다.
 
@@ -376,7 +376,7 @@ duration_sec,eps,label
 | 4. 자원 | 아래 자원 사용 참고. Spark CPU 상한에 걸린 주기 21.0%, 걸린 시간 114초. 생성기 프로세스당 ceiling 평균 0.44코어 | 기록 |
 | 5. 건수 대조·오류 | 생성 = ACK 5,244,098(2,622,035 + 2,622,063). 정상 주문 4,458,578 = `silver.order_events` 행 수 = `event_id` 고유 수. 출력 오류·전송 실패·지표 기록 실패 0. Spark 배치 181개 모두 `succeeded`, run_id 1개 | 통과 |
 
-종단 간 지연(`event_timestamp` → `ingested_at`, 이벤트 생성 구간 기준):
+E2E 지연(`event_timestamp` → `ingested_at`, 이벤트 생성 구간 기준):
 
 | 구간 | 행 수 | p50 | p95 | p99 | 최대 | 10초 초과 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -405,7 +405,7 @@ duration_sec,eps,label
 
 - **입력을 10,000 EPS에 맞추자 Spark는 그 속도를 따라갔다.** 50,000건 배치 트리거가 1차 5,423ms에서 4,493ms로 짧아졌다. 내역은 분류 3,014 → 2,475ms, 정상 주문 쓰기 2,038 → 1,722ms다. Spark 설정과 사용 코어(ceiling 평균 2.7코어)는 같다. 1차와 다른 점은 생성기다. 1차에서는 생성기가 코어 1개를 다 쓰면서 ACK p95가 최대 1,586ms, 큐가 10,183까지 올랐고 호스트 최대 사용이 7.56코어였다. 2차는 각각 38.5ms, 377, 6.71코어다. 생성기 포화가 같은 물리 코어의 Spark를 늦췄다고 보지만 직접 확인하지는 않았다.
 - **처리 여력은 약 11,000 EPS이고 상한 10,000 EPS 대비 여유는 약 10%다.** 트리거 5초 대비 평균 4.5초라서 배치 하나가 조금만 늦어도 5초를 넘는다(30개 중 3개). 일간 프로파일 피크 8,000 EPS는 이 여력 안에 있다.
-- **10,000 EPS에서 종단 간 지연 p99는 9.11초, 최대 9.61초로 10초 안이다.** 1차(p99 13.63초)의 지연 증가는 생성 미달로 생긴 트리거 지연 때문이었다.
+- **10,000 EPS에서 E2E 지연 p99는 9.11초, 최대 9.61초로 10초 안이다.** 1차(p99 13.63초)의 지연 증가는 생성 미달로 생긴 트리거 지연 때문이었다.
 - **Spark 메모리가 상한에 가깝다.** `anon` 최대 2,658MiB는 `mem_limit` 3GiB의 86.5%다. 페이지 캐시(`file`)는 173MiB뿐이라 회수할 여유가 작다. driver heap 2g에 JVM 비힙·Python worker가 더해진 값이다. OOM kill은 0건이다. 입력을 더 늘리거나 배치를 키우면 OOM 위험이 있으므로 조정 후보로 남긴다.
 - **Spark CPU 상한에 걸린 주기는 21.0%로 1차(20.0%)와 비슷하다.** 순간 사용이 4코어에 닿는 시점이 있다는 뜻이다. 처리 시간은 5초 안에 들어왔으므로 이번에는 바꾸지 않는다.
 - **파이프라인 운영 대시보드의 생성기 패널은 프로세스 2개를 합산하지 않는다.** 쿼리가 `ops.producer_stats` 행을 `run_id` 구분 없이 한 계열로 그리므로 ACK EPS가 프로세스당 값(약 5,000)으로 보인다. 판정은 원자료 합계로 했다. 2026-11-23에 패널을 1초 단위 합산으로 고쳤다([Grafana 데이터 원천](05-grafana-dashboard.md)).
@@ -414,7 +414,7 @@ duration_sec,eps,label
 ### 스파이크 프로파일 측정 2차: spike 12,000 EPS, 생성기 2개, Spark CPU 4 (2026-11-19)
 
 - 실행: 17:52:05~18:07:05 KST(생성기 기준 900초). 생성기 run_id `6ee33dc287ae462cb52acd0a31e8bb7e`·`ed1d453a2bf2428c9644f350db4d64c7`(2개 프로세스, 각각 `spike-12k-half.csv`), Spark run_id `de1c65cb-f85a-4e16-8183-642ed7760680`, 체크포인트 `/opt/spark/checkpoints/spike12k-2-20261119`, `latest`. 설정은 상한 확인 2차 측정과 같다(Spark `cpus` 4, Grafana `mem_limit` 1g). 1차 측정과 다른 점은 생성기 프로세스 수와 [자원 조정](#자원-조정)이다.
-- 원자료: [2026-11-19-spike-12k-2.json](../measurements/2026-11-19-spike-12k-2.json). Grafana 캡처(17:51:35~18:08:05 KST): [파이프라인 운영](../../images/2026-11-19-spike-12k-2/pipeline.png), [주문 현황](../../images/2026-11-19-spike-12k-2/orders.png). 경과 시각은 두 생성기 중 첫 1초 구간(08:52:05.336 UTC) 기준이다.
+- 원자료: [2026-11-19-spike-12k-2.json](../measurements/2026-11-19-spike-12k-2.json). Grafana 캡처(17:51:35~18:08:05 KST): [파이프라인 운영](../../images/captures/2026-11-19-spike-12k-2/pipeline.png), [주문 현황](../../images/captures/2026-11-19-spike-12k-2/orders.png). 경과 시각은 두 생성기 중 첫 1초 구간(08:52:05.336 UTC) 기준이다.
 
 **판정: 기준 1~4 통과.** 12,000 EPS 스파이크에서 backlog가 쌓이고 recovery 구간 시작 후 약 60초 안에 회복한다.
 
@@ -433,10 +433,10 @@ duration_sec,eps,label
 | 50,000건 배치 트리거 평균 | 5,986ms | 4,954ms(spike), 4,333ms(누적 해소 배치 13개) |
 | backlog 최대 | 381,158건 | 293,595건 |
 | 회복 시간 | 약 103초 | 약 60초 |
-| spike 구간 종단 간 p99 | 54.86초 | 35.29초 |
+| spike 구간 E2E p99 | 54.86초 | 35.29초 |
 | Spark CPU 상한 걸린 주기 | 16.8% | 18.1% |
 
-종단 간 지연(`event_timestamp` → `ingested_at`, 이벤트 생성 구간 기준):
+E2E 지연(`event_timestamp` → `ingested_at`, 이벤트 생성 구간 기준):
 
 | 구간 | 행 수 | p50 | p95 | p99 | 최대 | 10초 초과 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -476,7 +476,7 @@ duration_sec,eps,label
 - 실행: 18:37:08~18:52:08 KST(생성기 기준 900초). 생성기 run_id `194b297783154d2193d0f1b4f5f78a7c`·`1f0f788a58de40b79ea76b1cad74fe8d`(2개 프로세스, 각각 `spike-12k-half.csv`), Spark run_id `59cbd5c9-7a4b-42bd-9a79-4f62c1f02c34`, 체크포인트 `/opt/spark/checkpoints/spike12k-3-20261119`, `latest`.
 - 2차와 다른 점은 `SPARK_MAX_OFFSETS_PER_TRIGGER` 55,000(50,000에서 10% 상향) 하나다. 실행 시 환경변수로 덮어썼고 `.env`는 50,000 그대로다. `SPARK_JDBC_BATCH_SIZE`는 50,000을 유지했다. 쓰기 파티션당 행 수(약 18,000)보다 크므로 파티션당 INSERT 1회 조건은 그대로다.
 - `transforms.py`는 `useArrow=True` 상태였지만 Spark 이미지에 pyarrow·pandas가 없어 PySpark가 pickle UDF로 대체했다. 분류 경로는 2차와 같다.
-- 원자료: [2026-11-19-spike-12k-3.json](../measurements/2026-11-19-spike-12k-3.json). Grafana 캡처(18:36:38~18:53:08 KST): [파이프라인 운영](../../images/2026-11-19-spike-12k-3/pipeline.png), [주문 현황](../../images/2026-11-19-spike-12k-3/orders.png). 경과 시각은 두 생성기 중 첫 1초 구간(09:37:08.476 UTC) 기준이다.
+- 원자료: [2026-11-19-spike-12k-3.json](../measurements/2026-11-19-spike-12k-3.json). Grafana 캡처(18:36:38~18:53:08 KST): [파이프라인 운영](../../images/captures/2026-11-19-spike-12k-3/pipeline.png), [주문 현황](../../images/captures/2026-11-19-spike-12k-3/orders.png). 경과 시각은 두 생성기 중 첫 1초 구간(09:37:08.476 UTC) 기준이다.
 
 **판정: 기준 1~4 통과.** 회복 시간이 2차 약 60초에서 약 40~44초로 줄었다.
 
@@ -496,13 +496,13 @@ duration_sec,eps,label
 | 상한 배치 트리거 평균 | 4,954ms(spike) | 5,222ms(spike), 5,131ms(누적 해소 배치 7개) |
 | backlog 최대 | 293,595건 | 218,867건 |
 | 회복 시간 | 약 60초 | 약 40~44초 |
-| spike 구간 종단 간 p99 | 35.29초 | 27.94초 |
-| recovery 구간 종단 간 p99 | 32.94초 | 24.63초 |
+| spike 구간 E2E p99 | 35.29초 | 27.94초 |
+| recovery 구간 E2E p99 | 32.94초 | 24.63초 |
 | Spark CPU 상한 걸린 주기 | 18.1% | 19.2% |
 | Spark `anon` 최대 | 2,785MiB | 2,813MiB |
 | Spark `memory.peak` / 상한 | 3.08GB(95.5%) | 3.01GB(93.3%) |
 
-종단 간 지연(`event_timestamp` → `ingested_at`, 이벤트 생성 구간 기준):
+E2E 지연(`event_timestamp` → `ingested_at`, 이벤트 생성 구간 기준):
 
 | 구간 | 행 수 | p50 | p95 | p99 | 최대 | 10초 초과 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -543,7 +543,7 @@ duration_sec,eps,label
 
 **평시 (`steady.csv`)**
 
-| 구간 | 생성 EPS | ACK p95 최대 (100ms 초과 1초 구간) | 트리거 평균 / p99 | 종단 간 p99 / 최대 | backlog | 판정 |
+| 구간 | 생성 EPS | ACK p95 최대 (100ms 초과 1초 구간) | 트리거 평균 / p99 | E2E p99 / 최대 | backlog | 판정 |
 | --- | ---: | --- | --- | --- | --- | --- |
 | base 5,000 (120~300초) | 4,996 | 20.8ms (0 / 180) | 2,643 / 3,266ms | 7.38 / 7.97초 | 0 | 통과 |
 | peak 7,500 | 7,479 | 326ms (1 / 300) | 3,542 / 4,976ms | 8.06 / 8.80초 | 0 | **실패**(트리거 p99) |
@@ -553,7 +553,7 @@ duration_sec,eps,label
 
 **지속 용량 (`step.csv`)**
 
-| 단계 | 생성 EPS | ACK p95 100ms 이내 비율 | 트리거 평균 / 최대 | 5초 초과 배치 | 실처리량 | backlog 최대 / 기울기 | 종단 간 p99 | 판정 |
+| 단계 | 생성 EPS | ACK p95 100ms 이내 비율 | 트리거 평균 / 최대 | 5초 초과 배치 | 실처리량 | backlog 최대 / 기울기 | E2E p99 | 판정 |
 | --- | ---: | ---: | --- | ---: | ---: | --- | ---: | --- |
 | 8,000 | 7,972 | 99.2% | 3,869 / 5,209ms | 1 | 10,305 | 0 | 8.70초 | 통과 |
 | 9,000 | 8,915 | 93.2% | 4,382 / 5,845ms | 3 | 10,155 | 0 | 9.73초 | 통과 |

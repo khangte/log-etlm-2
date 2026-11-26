@@ -5,7 +5,7 @@
 
 ## 목표와 범위
 
-대량 이벤트 로그를 10초 이내에 처리하는 근실시간 파이프라인을 구축한다. 처리량과 종단 간 지연은 통합 후 측정한다.
+대량 이벤트 로그를 10초 이내에 처리하는 근실시간 파이프라인을 구축한다. 처리량과 E2E 지연은 통합 후 측정한다.
 
 `Python Producer → Kafka → Spark Structured Streaming → ClickHouse → Grafana`
 
