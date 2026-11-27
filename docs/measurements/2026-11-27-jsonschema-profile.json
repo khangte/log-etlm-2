@@ -1,0 +1,218 @@
+{
+ "date": "2026-11-27",
+ "code": "e9184c6 (수정 전, Python jsonschema 단독 검증)",
+ "image": "log-etlm-2-spark:latest (Python 3.10.12, jsonschema 4.26.0, referencing 0.37.0, rfc3339-validator 0.1.4)",
+ "script": "docs/measurements/profile_jsonschema_validation.py",
+ "run": "git archive e9184c6 apps/streaming/src apps/log_generator/src contracts 를 docker run --rm -i 로 넘기고 스크립트는 base64 환경변수로 전달",
+ "notes": [
+  "측정 중 스트리밍 Spark 컨테이너(log-etlm-2-spark-1)가 떠 있었다. 생성기는 꺼져 있었다.",
+  "절대 시간은 2026-11-17 측정(classify 485µs)보다 크다. 비교는 같은 실행 안의 비율로만 한다.",
+  "cProfile 비율은 프로파일러 오버헤드가 포함된 값이다."
+ ],
+ "n": 20000,
+ "doc": "order_completed 1.0.0, EventGenerator(seed=1), user pool 500, 모두 유효",
+ "timing_best_of_5": {
+  "classify_us": 590.5,
+  "best_match_iter_errors_us": 556.4,
+  "is_valid_us": 542.4,
+  "jsonschema_rs_is_valid_us": 1.67
+ },
+ "profile": {
+  "total_sec_with_profiler": 24.92,
+  "function_calls_per_doc": 2333.2,
+  "by_group_share": {
+   "검증기 순회 (iter_errors, descend)": 0.315,
+   "$ref 참조 해석 (referencing)": 0.269,
+   "기타 (builtins 등)": 0.165,
+   "키워드 함수 (properties, required 등)": 0.106,
+   "타입 검사 (type checker)": 0.086,
+   "jsonschema 기타": 0.048,
+   "pattern 정규식": 0.007,
+   "format 검사 (date-time)": 0.004
+  },
+  "top_tottime": [
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:396(descend)",
+    "calls_per_doc": 52.0,
+    "tottime_share": 0.128,
+    "cumtime_share": 0.981
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:339(evolve)",
+    "calls_per_doc": 52.0,
+    "tottime_share": 0.097,
+    "cumtime_share": 0.233
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/referencing/_core.py:254(pointer)",
+    "calls_per_doc": 14.0,
+    "tottime_share": 0.058,
+    "cumtime_share": 0.158
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:282(__attrs_post_init__)",
+    "calls_per_doc": 52.0,
+    "tottime_share": 0.05,
+    "cumtime_share": 0.08
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/_types.py:94(is_type)",
+    "calls_per_doc": 88.0,
+    "tottime_share": 0.046,
+    "cumtime_share": 0.074
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/_keywords.py:282(type)",
+    "calls_per_doc": 33.0,
+    "tottime_share": 0.032,
+    "cumtime_share": 0.105
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/referencing/_core.py:165(create_resource)",
+    "calls_per_doc": 66.0,
+    "tottime_share": 0.031,
+    "cumtime_share": 0.053
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/_keywords.py:290(properties)",
+    "calls_per_doc": 7.0,
+    "tottime_share": 0.03,
+    "cumtime_share": 0.987
+   },
+   {
+    "func": "<attrs generated methods jsonschema.validators.create.<locals>.Validator>:26(__init__)",
+    "calls_per_doc": 52.0,
+    "tottime_share": 0.027,
+    "cumtime_share": 0.107
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:293(<listcomp>)",
+    "calls_per_doc": 52.0,
+    "tottime_share": 0.027,
+    "cumtime_share": 0.027
+   },
+   {
+    "func": "~:0(<built-in method builtins.isinstance>)",
+    "calls_per_doc": 245.4,
+    "tottime_share": 0.025,
+    "cumtime_share": 0.038
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/referencing/_core.py:653(lookup)",
+    "calls_per_doc": 14.0,
+    "tottime_share": 0.024,
+    "cumtime_share": 0.266
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:452(is_type)",
+    "calls_per_doc": 88.0,
+    "tottime_share": 0.023,
+    "cumtime_share": 0.097
+   },
+   {
+    "func": "<attrs generated methods referencing._core.Resource>:29(__init__)",
+    "calls_per_doc": 66.0,
+    "tottime_share": 0.022,
+    "cumtime_share": 0.022
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/referencing/jsonschema.py:47(_dollar_id)",
+    "calls_per_doc": 52.0,
+    "tottime_share": 0.019,
+    "cumtime_share": 0.029
+   }
+  ],
+  "top_cumtime": [
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/exceptions.py:440(best_match)",
+    "calls_per_doc": 1.0,
+    "tottime_share": 0.0,
+    "cumtime_share": 1.0
+   },
+   {
+    "func": "~:0(<built-in method builtins.max>)",
+    "calls_per_doc": 1.0,
+    "tottime_share": 0.001,
+    "cumtime_share": 1.0
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:349(iter_errors)",
+    "calls_per_doc": 1.0,
+    "tottime_share": 0.002,
+    "cumtime_share": 0.998
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/_keywords.py:290(properties)",
+    "calls_per_doc": 7.0,
+    "tottime_share": 0.03,
+    "cumtime_share": 0.987
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:396(descend)",
+    "calls_per_doc": 52.0,
+    "tottime_share": 0.128,
+    "cumtime_share": 0.981
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/_keywords.py:274(ref)",
+    "calls_per_doc": 14.0,
+    "tottime_share": 0.014,
+    "cumtime_share": 0.463
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:459(_validate_reference)",
+    "calls_per_doc": 14.0,
+    "tottime_share": 0.011,
+    "cumtime_share": 0.276
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/referencing/_core.py:653(lookup)",
+    "calls_per_doc": 14.0,
+    "tottime_share": 0.024,
+    "cumtime_share": 0.266
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:339(evolve)",
+    "calls_per_doc": 52.0,
+    "tottime_share": 0.097,
+    "cumtime_share": 0.233
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/referencing/_core.py:254(pointer)",
+    "calls_per_doc": 14.0,
+    "tottime_share": 0.058,
+    "cumtime_share": 0.158
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/_keywords.py:59(items)",
+    "calls_per_doc": 1.0,
+    "tottime_share": 0.003,
+    "cumtime_share": 0.127
+   },
+   {
+    "func": "<attrs generated methods jsonschema.validators.create.<locals>.Validator>:26(__init__)",
+    "calls_per_doc": 52.0,
+    "tottime_share": 0.027,
+    "cumtime_share": 0.107
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/_keywords.py:282(type)",
+    "calls_per_doc": 33.0,
+    "tottime_share": 0.032,
+    "cumtime_share": 0.105
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:452(is_type)",
+    "calls_per_doc": 88.0,
+    "tottime_share": 0.023,
+    "cumtime_share": 0.097
+   },
+   {
+    "func": "/usr/local/lib/python3.10/dist-packages/jsonschema/validators.py:282(__attrs_post_init__)",
+    "calls_per_doc": 52.0,
+    "tottime_share": 0.05,
+    "cumtime_share": 0.08
+   }
+  ]
+ }
+}

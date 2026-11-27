@@ -599,6 +599,37 @@ docker compose stop spark                                      # 정지. 체크�
 - 원인: 모든 레코드에 수행하는 Python `jsonschema` 검증이 분류 시간의 약 97%를 차지한다. `local[3]`에서 분류만으로 이론상 약 6,200건/s이며, Kafka 읽기·UDF 직렬화·캐시·집계를 더하면 목표에 못 미친다.
 - 구간별 측정은 개별 호출 반복이라 합이 `classify()` 전체와 정확히 맞지 않는다.
 
+#### 검증 비용 프로파일 (2026-11-27 보완 측정)
+
+- 목적: Python `jsonschema` 검증이 왜 느린지 측정으로 확인한다. 위 근거 수치는 구간 시간만 있고 원인 분해가 없었다.
+- 방법: [profile_jsonschema_validation.py](../measurements/profile_jsonschema_validation.py). 수정 전 커밋 `e9184c6` 코드를 `git archive`로 Spark 이미지(Python 3.10.12, `jsonschema` 4.26.0, `referencing` 0.37.0)에 넣고, 생성기 정상 주문 20,000건(`seed=1`)에 `best_match(validator.iter_errors(doc))`를 cProfile로 실행했다. 시간은 5회 중 가장 빠른 회차다. 측정 중 스트리밍 Spark 컨테이너가 떠 있었고 생성기는 꺼져 있었다. 원자료: [2026-11-27-jsonschema-profile.json](../measurements/2026-11-27-jsonschema-profile.json).
+- 절대 시간은 11-17 측정보다 크다(`classify()` 590.5µs). 같은 실행 안의 비교와 비율만 쓴다.
+
+| 항목 (정상 주문 1건당) | 값 |
+| --- | --- |
+| `classify()` 전체 | 590.5µs |
+| `best_match(iter_errors)` | 556.4µs |
+| `is_valid` (같은 검증기) | 542.4µs |
+| `jsonschema-rs` `is_valid` | 1.67µs |
+| Python 함수 호출 수 | 약 2,333회 |
+| `descend` 호출 (하위 스키마 진입) | 52회, 매번 `evolve`로 검증기 객체 새로 생성 |
+| `$ref` 해석 (`ref` 키워드) | 14회 |
+
+| 비용 범주 (자기 시간 비율, 프로파일러 오버헤드 포함) | 비율 |
+| --- | ---: |
+| 검증기 순회 (`iter_errors`, `descend`, `evolve`) | 31.5% |
+| `$ref` 참조 해석 (`referencing`) | 26.9% |
+| 내장 함수 (`isinstance` 등) | 16.5% |
+| 키워드 함수 (`properties`, `required` 등) | 10.6% |
+| 타입 검사 | 8.6% |
+| 그 밖의 `jsonschema` | 4.8% |
+| `pattern` 정규식 | 0.7% |
+| `date-time` 형식 검사 | 0.4% |
+
+- 해석: 검증 비용은 특정 키워드 검사가 아니라 검증기 구조 자체에서 나온다. 문서 1건마다 하위 스키마 52곳에 들어가며 그때마다 검증기 객체를 새로 만들고(`evolve` 누적 23.3%), `$ref` 14개를 매번 `referencing`으로 다시 해석한다(`ref` 누적 46.3%, 참조 대상 검증 포함). 이 과정이 문서당 Python 함수 호출 약 2,333회가 된다. 정규식과 시각 형식 검사는 합쳐 1.1%로 작다.
+- 오류 수집은 원인이 아니다. 유효 문서에서 `is_valid`(542.4µs)와 `best_match(iter_errors)`(556.4µs)의 차이는 약 2.5%다. `jsonschema`의 `is_valid`도 내부에서 `iter_errors`를 호출한다.
+- `jsonschema-rs`는 같은 계약 스키마를 Rust로 미리 컴파일해 검사하므로 이 Python 객체 생성과 참조 해석 비용이 없다(1.67µs, 약 330배 차이).
+
 #### 규칙 불일치
 
 `jsonschema-rs` `Draft202012Validator(schema, validate_formats=True)`와 기존 `_StrictValidator`의 판정을 대조했다.
@@ -896,7 +927,7 @@ docker compose stop spark                                      # 정지. 체크�
 | step 11,000 | 4,941 → 4,472ms | 5,642 → 6,237ms | 10,803 → 12,161 | 9.88 → 9.88초 | 72.3% → 79.8% |
 
 - 지속 용량: 10,000 EPS 단계까지 통과했다(목표 충족). 11,000 단계는 backlog 증가 추세(24.3건/초)로 실패했다. 실처리량은 단계마다 15~22% 늘었다.
-- 평시 피크: 트리거 평균은 9% 줄었으나 p99(5,955ms)가 목표 3,500ms를 넘었다. ACK p95가 100ms 이내인 1초 구간 비율도 98.0%로 기준 99%에 미달했다. 구간 배치 59개 중 5초를 넘은 2개(batch 71: 5,115ms, 89: 5,854ms)가 p99를 정했다. 두 배치는 분류·계측 action이 3.0~3.2초로, 같은 크기의 다른 배치(1.6~1.9초)보다 길었다.
+- 평시 피크: 트리거 평균은 9% 줄었으나 p99(5,955ms)가 목표 3,500ms를 넘었다. ACK p95가 100ms 이내인 1초 구간 비율도 98.0%로 기준 99%에 미달했다. 구간 배치 59개 중 5초를 넘은 2개(측정 JSON `trigger_ms` 기준 batch 71: 5,188ms, 89: 5,955ms)가 p99를 정했다. 두 배치는 분류·계측 action이 3.0~3.2초로, 같은 크기의 다른 배치(1.6~1.9초)보다 길었다.
 - Spark CPU 상한에 걸린 주기 비율: steady 19.9% → 9.5%, step 23.6% → 11.6%. CPU 사용 시간은 steady 1,184초 → 985초, step 1,930초 → 1,528초다.
 - **메모리:** Spark `memory.peak`가 3,221,356,544B로 `mem_limit: 3g`(3,221,225,472B)에 닿았다. OOM kill은 0이다. steady 후반 `anon`은 2.99GB, `file`은 3~12MB로 기준값(`anon` 2.91GB, `file` 58~200MB)보다 page cache가 더 밀려났다. Arrow UDF로 Python 워커마다 pyarrow·pandas가 올라온 영향으로 추정한다. 평시 피크의 느린 배치 2개와의 관계는 확인하지 않았다. 선택 기준 4는 경계 상태다.
 - 판정: 선택 기준 3 중 지속 용량·E2E 지연·공통 기준은 충족했다. 평시 피크 트리거 p99는 미충족이다. 다음 후보는 메모리 여유 확보(드라이버 힙 축소 또는 `mem_limit` 조정)와 느린 배치 원인 확인이다.

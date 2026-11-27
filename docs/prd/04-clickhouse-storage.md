@@ -632,7 +632,7 @@ JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한�
 
 ### 멈춤 감시·자동 재시작 재검증: 상한 없는 재시작 (2026-11-26)
 
-**판정: 통과.** [위 검증](#멈춤-감시자동-재시작-검증-2026-11-18)의 S1~S3을 현재 설정(`restart: on-failure`, 상한 없음)으로 다시 주입했다. 재시작 4회 모두 사람 개입 없이 복구됐고, 정상 주문·DLQ 누락은 없다.
+**판정: 통과.** [위 검증](#멈춤-감시자동-재시작-검증-2026-11-18)의 S1~S3을 현재 설정(`restart: on-failure`, 상한 없음)으로 다시 주입했다. 재시작 4회 모두 사람 개입 없이 복구됐고, 정상 주문 누락은 없다. DLQ는 건수만 대조했고 키 대조는 하지 않았다.
 
 - 조건: 커밋 `366558a`. 생성기 2,000 EPS·660초, Compose `spark` 서비스, 체크포인트 `/opt/spark/checkpoints/ch-stall-20261126`·`latest`. 스크립트는 주입·되돌림만 하고 재시작은 Compose가 했다.
 - 실행: 2026-11-26 20:26:45~20:37:46 KST. Spark query_id `1db6d975-833b-4e48-b501-3315eb6d9662`. 근거: [측정 JSON](../measurements/2026-11-26-spark-stall-recovery.json), 스크립트 [run_dlq_stall_fault.sh](../measurements/run_dlq_stall_fault.sh). Grafana 캡처(20:26:00~20:39:30 KST, 측정 뒤 과거 범위로 캡처): [파이프라인 운영](../../images/captures/2026-11-26-spark-stall-recovery/pipeline.png), [주문 현황](../../images/captures/2026-11-26-spark-stall-recovery/orders.png).
