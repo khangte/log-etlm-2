@@ -98,6 +98,7 @@
     - Application(01:40~02:00): `igccservice` PowerEvent(01:49:02 다음 01:59:32)와 AppModel-State만 있음. 같은 간격의 공백이 다른 시간대에도 있어 원인 근거로 보지 않는다.
     - Hyper-V-Worker-Admin, Hyper-V-Compute-Operational, Hyper-V-Hypervisor-Operational(01:40~02:00, 관리자 권한): 0건.
     - 판정: 호스트 이벤트 로그에서 정지 원인 기록을 찾지 못했다. 다음 측정에서는 `logman` 성능 카운터(가용 메모리, Pages/sec, CPU, Hypervisor 논리 프로세서 실행률)를 1초 간격으로 함께 수집한다.
+  - 2026-11-26 `logman` 동시 수집 60분 재실행([PRD 03 기록](../prd/03-stream-processing.md#daily-재실행-호스트-성능-카운터-동시-수집-2026-11-26)): VM 정지가 재현되지 않았다(감지기 3개 지연 0건). 호스트 가용 메모리 최소 967MB, Pages/sec 최대 19,023, 호스트 CPU 최대 96.3%에서도 정지는 없었다. 정지 원인은 여전히 미확인이다.
 - 정지는 60분에 1~2회 일어나 재현성이 낮다.
 - WSL 측 메모리는 측정 직후 기준 11,963MiB 중 사용 7,637MiB, 가용 4,326MiB였다. 정지 순간의 값은 기록하지 못했다.
 - 주기적 Full GC의 주기를 늘리거나 끄는 효과는 측정하지 않았다.

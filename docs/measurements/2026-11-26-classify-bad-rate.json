@@ -1,0 +1,37 @@
+{
+ "n": 20000,
+ "by_kind_us": {
+  "normal_order": 22.6,
+  "health_check": 6.5,
+  "malformed_json": 12.7,
+  "missing_order_id": 313.5,
+  "invalid_amount_type": 320.2
+ },
+ "by_rate": [
+  {
+   "bad_rate": 0.0,
+   "us_per_event": 20.9,
+   "events_per_sec_core": 47816
+  },
+  {
+   "bad_rate": 0.05,
+   "us_per_event": 31.3,
+   "events_per_sec_core": 31992
+  },
+  {
+   "bad_rate": 0.2,
+   "us_per_event": 62.4,
+   "events_per_sec_core": 16015
+  },
+  {
+   "bad_rate": 0.5,
+   "us_per_event": 122.4,
+   "events_per_sec_core": 8168
+  },
+  {
+   "bad_rate": 1.0,
+   "us_per_event": 226.2,
+   "events_per_sec_core": 4421
+  }
+ ]
+}

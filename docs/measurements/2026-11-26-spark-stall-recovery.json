@@ -1,0 +1,126 @@
+{
+ "status": "통과",
+ "code": "366558a",
+ "script": "docs/measurements/run_dlq_stall_fault.sh",
+ "checkpoint": "/opt/spark/checkpoints/ch-stall-20261126",
+ "restart_policy": "on-failure (상한 없음)",
+ "spark_query_id": "1db6d975-833b-4e48-b501-3315eb6d9662",
+ "events": [
+  {
+   "utc": "2026-11-26T11:26:31.113",
+   "elapsed": 0.0,
+   "event": "spark_started"
+  },
+  {
+   "utc": "2026-11-26T11:26:45.555",
+   "elapsed": 0.0,
+   "event": "sources_ready restart_count=0"
+  },
+  {
+   "utc": "2026-11-26T11:26:45.562",
+   "elapsed": 0.003,
+   "event": "generator_started"
+  },
+  {
+   "utc": "2026-11-26T11:27:45.583",
+   "elapsed": 60.025,
+   "event": "inject_s1_sigstop"
+  },
+  {
+   "utc": "2026-11-26T11:29:12.665",
+   "elapsed": 147.107,
+   "event": "spark_restarted restart_count=1"
+  },
+  {
+   "utc": "2026-11-26T11:30:47.815",
+   "elapsed": 242.256,
+   "event": "inject_s2_dlq_too_small"
+  },
+  {
+   "utc": "2026-11-26T11:31:23.185",
+   "elapsed": 277.628,
+   "event": "spark_restarted restart_count=2"
+  },
+  {
+   "utc": "2026-11-26T11:32:07.639",
+   "elapsed": 322.08,
+   "event": "revert_s2"
+  },
+  {
+   "utc": "2026-11-26T11:33:01.348",
+   "elapsed": 375.79,
+   "event": "spark_restarted restart_count=3"
+  },
+  {
+   "utc": "2026-11-26T11:34:17.771",
+   "elapsed": 452.212,
+   "event": "inject_s3_dlq_too_small"
+  },
+  {
+   "utc": "2026-11-26T11:34:36.402",
+   "elapsed": 470.843,
+   "event": "revert_s3"
+  },
+  {
+   "utc": "2026-11-26T11:35:50.678",
+   "elapsed": 545.119,
+   "event": "spark_restarted restart_count=4"
+  },
+  {
+   "utc": "2026-11-26T11:37:46.747",
+   "elapsed": 661.188,
+   "event": "generator_exited code=0"
+  },
+  {
+   "utc": "2026-11-26T11:38:46.814",
+   "elapsed": 721.255,
+   "event": "done restart_count=4 running=true"
+  }
+ ],
+ "generator": {
+  "eps": 2000,
+  "events": 1320000,
+  "acked": 1320000,
+  "failed": 0,
+  "undelivered": 0,
+  "normal_order": 1122310,
+  "invalid_order": 66082
+ },
+ "scenarios": {
+  "S1_sigstop": {
+   "inject": "11:27:45.6 UTC",
+   "detect": "11:29:11.6 stalled 90s",
+   "restart": "11:29:12.7",
+   "inject_to_restart_s": 87.1
+  },
+  "S2_dlq_hold": {
+   "inject": "11:30:47.8",
+   "fail": "11:31:21 TimeoutException Expiring 9 record(s) 30000 ms, batch 29 failed/dlq_write_action dlq_write_ms 30271",
+   "restart": "11:31:23.2",
+   "revert": "11:32:07.6",
+   "then": "재시작 run 6caac242 StackOverflowError 멈춤 → 11:33:00.9 stalled 91s → 11:33:01.3 재시작"
+  },
+  "S3_revert_during_retry": {
+   "inject": "11:34:17.8",
+   "revert": "11:34:36.4",
+   "then": "StackOverflowError 멈춤 → 11:35:50.0 stalled 93s → 11:35:50.7 재시작"
+  }
+ },
+ "restart_count": 4,
+ "final_running": true,
+ "reconciliation": {
+  "physical_rows": 1122310,
+  "unique_event_id": 1122310,
+  "final_view": 1122310,
+  "succeeded_order_rows_sum": 1122310,
+  "normal_order": 1122310,
+  "dlq_messages": 66097,
+  "dlq_offsets": [
+   916016,
+   982113
+  ],
+  "succeeded_dlq_rows_sum": 66082,
+  "invalid_order": 66082,
+  "dlq_rerun_duplicates": 15
+ }
+}

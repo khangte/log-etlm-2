@@ -1,0 +1,153 @@
+{
+ "status": "통과",
+ "code": "366558a",
+ "script": "docs/measurements/run_clickhouse_fault.sh",
+ "checkpoint": "/opt/spark/checkpoints/ch-fault-20261126",
+ "spark_query_id": "1b07e5b6-f84d-4ac9-9a9b-7c1585bafe9a",
+ "spark_run_ids": [
+  "3c04550a-7fbe-44e9-8079-ac62454e9f45",
+  "63de0691-fc2d-4ec1-ae7e-f9280c9ef45d",
+  "100b8e08-4000-4191-b342-c199c212fedd"
+ ],
+ "events": [
+  {
+   "utc": "2026-11-26T10:51:00.137",
+   "elapsed": 0.0,
+   "event": "spark_started"
+  },
+  {
+   "utc": "2026-11-26T10:51:14.573",
+   "elapsed": 0.0,
+   "event": "sources_ready"
+  },
+  {
+   "utc": "2026-11-26T10:51:14.812",
+   "elapsed": 0.002,
+   "event": "generator_started"
+  },
+  {
+   "utc": "2026-11-26T10:55:14.519",
+   "elapsed": 239.709,
+   "event": "inject_write_delay"
+  },
+  {
+   "utc": "2026-11-26T10:56:14.346",
+   "elapsed": 299.536,
+   "event": "revert_write_delay"
+  },
+  {
+   "utc": "2026-11-26T10:58:14.427",
+   "elapsed": 419.616,
+   "event": "inject_stored_then_fail"
+  },
+  {
+   "utc": "2026-11-26T10:58:19.504",
+   "elapsed": 424.694,
+   "event": "revert_stored_then_fail"
+  },
+  {
+   "utc": "2026-11-26T10:58:19.624",
+   "elapsed": 424.814,
+   "event": "spark_restarted restart_count=1 exit=0"
+  },
+  {
+   "utc": "2026-11-26T11:01:14.500",
+   "elapsed": 599.69,
+   "event": "inject_access_denied"
+  },
+  {
+   "utc": "2026-11-26T11:01:19.670",
+   "elapsed": 604.86,
+   "event": "revert_access_denied"
+  },
+  {
+   "utc": "2026-11-26T11:01:19.833",
+   "elapsed": 605.023,
+   "event": "spark_restarted restart_count=2 exit=0"
+  },
+  {
+   "utc": "2026-11-26T11:06:15.751",
+   "elapsed": 900.942,
+   "event": "generator_exited code=0"
+  },
+  {
+   "utc": "2026-11-26T11:09:35.148",
+   "elapsed": 1100.337,
+   "event": "done restart_count=2 grants=1"
+  }
+ ],
+ "generator": {
+  "eps": 5000,
+  "events": 4500000,
+  "acked": 4500000,
+  "failed": 0,
+  "undelivered": 0,
+  "normal_order": 3824505,
+  "ack_latency_ms": {
+   "p50": 5.8,
+   "p95": 7.2,
+   "p99": 10.2
+  }
+ },
+ "attempts": {
+  "succeeded": 176,
+  "failed": [
+   {
+    "batch_id": 84,
+    "failed_stage": "orders_write_action",
+    "input_rows": 24976,
+    "order_rows": 21328
+   },
+   {
+    "batch_id": 117,
+    "failed_stage": "orders_write_action",
+    "input_rows": 24985,
+    "order_rows": 21058
+   }
+  ]
+ },
+ "write_delay": {
+  "orders_write_ms_p50_20s": [
+   3586,
+   3588,
+   3512
+  ],
+  "baseline_orders_write_ms_p50": "590~690",
+  "trigger_over_5s": "1/13",
+  "kafka_to_callback_p95_max_ms": 4920
+ },
+ "stored_then_fail": {
+  "query_log": "ExceptionWhileProcessing code 395 x3, written_rows 6929+7193+7206=21328",
+  "part_log_new_parts": [
+   6929,
+   7193,
+   7206
+  ],
+  "inject_to_restart_s": 5.2,
+  "rerun_success_at": "10:58:28.220",
+  "rerun_callback_ms": 10256,
+  "recovered_k2c_p95_by": "10:59:00 (inject +46s)",
+  "max_k2c_p95_ms": 23070
+ },
+ "access_denied": {
+  "query_log": "ExceptionBeforeStart code 497 x3, written_rows 0",
+  "inject_to_restart_s": 5.3,
+  "rerun_success_at": "11:01:28.038",
+  "rerun_callback_ms": 9831,
+  "recovered_k2c_p95_by": "11:02:00 (inject +46s)",
+  "max_k2c_p95_ms": 22479
+ },
+ "reconciliation": {
+  "physical_rows": 3824505,
+  "unique_event_id": 3824505,
+  "final_view": 3824505,
+  "normal_order": 3824505,
+  "physical_duplicates_inserted": 21328,
+  "merge_parts_after_failure": 51,
+  "note": "분석 시점에는 ReplacingMergeTree 병합으로 물리 중복이 이미 합쳐졌다"
+ },
+ "cleanup": {
+  "default_tables_left": 0,
+  "spark_writer_order_events_grant": "SELECT, INSERT 복구"
+ }
+}

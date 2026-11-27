@@ -549,6 +549,25 @@ JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한�
 - 재실행 배치의 정상 쓰기는 4.9초·4.7초로 기준의 4배다. 재시작 직후 JVM·JDBC 연결 준비 비용으로 보며, 3단계 재시작 직후 분류 action 증가와 같은 현상이다.
 - 최종 대조: 생성기 4,500,000건 ACK(실패·미전달 0). 고유 `event_id` = `FINAL` 뷰 = `normal_order` = **3,825,832**(누락 없음). 물리 행 3,834,405 − 고유 수 = 8,573 = 저장 후 오류에서 남은 행. 시도 행은 성공 166, `orders_write_action` 실패 2.
 
+### 장애 주입 재실행: 현재 구성 (2026-11-26)
+
+**판정: 통과.** 11-18과 같은 장애 3개를 현재 구성(Compose `spark` 서비스, `restart: on-failure`, S5a·D1 적용)으로 다시 주입했다. 두 적재 실패 모두 사람 개입 없이 자동 재시작으로 복구됐고, 누락·이중 합산이 없었다.
+
+- 조건: 커밋 `366558a`. 생성기 5,000 EPS·900초, 체크포인트 `/opt/spark/checkpoints/ch-fault-20261126`·`latest`. 주입 시점과 방법은 [장애 주입 계획](#장애-주입)과 같다. 11-18과 달리 Spark 재시작은 Compose 재시작 정책이 했고, 스크립트는 Spark 종료를 감지하면 장애만 되돌렸다.
+- 실행: 2026-11-26 19:51:14~20:06:15 KST. Spark query_id `1b07e5b6-f84d-4ac9-9a9b-7c1585bafe9a`. 근거: [측정 JSON](../measurements/2026-11-26-clickhouse-fault-injection.json), 스크립트 [run_clickhouse_fault.sh](../measurements/run_clickhouse_fault.sh). Grafana 캡처(19:50:30~20:08:00 KST, 측정 뒤 과거 범위로 캡처): [파이프라인 운영](../../images/captures/2026-11-26-clickhouse-fault-injection/pipeline.png), [주문 현황](../../images/captures/2026-11-26-clickhouse-fault-injection/orders.png).
+
+| 장애 | 지표 | 재시작 | 회복 |
+| --- | --- | --- | --- |
+| 쓰기 지연(240~300초) | 정상 쓰기 p50 590~690 → 약 3,500ms, INSERT 서버 p50 약 3.2초(Grafana). 트리거 5초 초과 1/13, Kafka → 콜백 p95 최대 4.92초 | 없음 | 되돌린 뒤 첫 20초 구간부터 기준 |
+| 저장 후 오류(420초) | batch 84 `failed`/`orders_write_action`. `query_log` `ExceptionWhileProcessing`(395) 3회 | 주입 5.2초 뒤 자동 재시작(1회) | batch 84 재실행 성공(주입 +14초), Kafka → 콜백 p95 기준 복귀 약 +46초 |
+| 저장 전 거부(600초) | batch 117 `failed`/`orders_write_action`. `query_log` `ExceptionBeforeStart`(497) 3회, `written_rows` 0 | 주입 5.3초 뒤 자동 재시작(1회) | batch 117 재실행 성공(주입 +14초), 기준 복귀 약 +46초 |
+
+- 최종 대조: 생성기 4,500,000건 ACK(실패·미전달 0). 고유 `event_id` = `FINAL` 뷰 = 물리 행 = `normal_order` = **3,824,505**. Spark 시도 성공 176, 실패 2, 재시작 2회.
+- 물리 중복: 저장 후 오류의 INSERT 3개가 모두 저장됐다(`part_log` `NewPart` 6,929·7,193·7,206행). 재실행이 같은 21,328행을 다시 넣었다. 11-18에는 3개 중 1개(8,573행)만 남았다. 분석 시점(약 10분 뒤)에는 `ReplacingMergeTree` 병합으로 이미 합쳐져 물리 행 = 고유 수였다. D1(배치 내 중복 제거 제거) 이후에도 재시도 중복은 `FINAL` 뷰에서 한 번만 센다.
+- 11-18 대비: 쓰기 지연 중 트리거 5초 초과가 9/11 → 1/13으로 줄었다. 평시 정상 쓰기 p50이 1,128 → 약 650ms로 줄어 3초 지연을 흡수했다. 재시작 후 첫 배치 콜백은 약 10초다.
+- 정리: `default` 데이터베이스에 남은 객체 없음, `spark_writer`의 `silver.order_events` 권한은 `SELECT, INSERT`로 복구했다.
+- 한계: 장애를 5초 안에 되돌렸으므로 장애가 이어질 때 재시작이 반복되는 경우는 시험하지 않았다. 스크립트의 backlog 0 확인은 마지막 진행 행 조건이 맞지 않아 기록되지 않았다. 입력 종료 직후 마지막 배치(11:06:20)의 Kafka → 콜백 p95는 5.0초다.
+
 ### 충돌 점검 쿼리 검증 결과 (2026-11-18)
 
 **판정: 통과(쿼리 수정 없음).** 관리자 계정으로 `conflict-test-<uuid>-*` ID 8행을 `silver.order_events`에 INSERT해 [점검 쿼리](#이벤트-식별과-테이블-기준)를 그대로 실행했다.
@@ -610,6 +629,24 @@ JDBC write action 전체 시간과 실제 INSERT 요청별 시간은 구분한�
 - 재시작 상한: 앞선 시도(`ch-stall-20261118`)는 Kafka·ClickHouse가 꺼진 상태라 bootstrap 주소 해석 실패로 5회 연속 재시작 뒤 멈췄다. 상한 동작은 확인했고, 결과 대조에서는 제외했다(이후 상한 제거, PRD 03 참조).
 - 코드 보정: 첫 실행에서 감시 기준 시각이 `query_context`에 들어가 시작·배치 지표 로그에 섞였다. 리스너의 별도 값으로 분리한 뒤 S1만 다시 실행해 16:03:02 감시 종료 → 16:03:09 재시작, 물리 = 고유 373,993을 확인했다.
 - 남은 한계: 감시는 Driver Python 프로세스 안 스레드다. 이 프로세스 자체가 멈추거나 이벤트는 오는데 처리량만 0인 경우는 감지하지 못하며, 진행 행 공백 경보(5단계 Grafana)가 이를 보완한다.
+
+### 멈춤 감시·자동 재시작 재검증: 상한 없는 재시작 (2026-11-26)
+
+**판정: 통과.** [위 검증](#멈춤-감시자동-재시작-검증-2026-11-18)의 S1~S3을 현재 설정(`restart: on-failure`, 상한 없음)으로 다시 주입했다. 재시작 4회 모두 사람 개입 없이 복구됐고, 정상 주문·DLQ 누락은 없다.
+
+- 조건: 커밋 `366558a`. 생성기 2,000 EPS·660초, Compose `spark` 서비스, 체크포인트 `/opt/spark/checkpoints/ch-stall-20261126`·`latest`. 스크립트는 주입·되돌림만 하고 재시작은 Compose가 했다.
+- 실행: 2026-11-26 20:26:45~20:37:46 KST. Spark query_id `1db6d975-833b-4e48-b501-3315eb6d9662`. 근거: [측정 JSON](../measurements/2026-11-26-spark-stall-recovery.json), 스크립트 [run_dlq_stall_fault.sh](../measurements/run_dlq_stall_fault.sh). Grafana 캡처(20:26:00~20:39:30 KST, 측정 뒤 과거 범위로 캡처): [파이프라인 운영](../../images/captures/2026-11-26-spark-stall-recovery/pipeline.png), [주문 현황](../../images/captures/2026-11-26-spark-stall-recovery/orders.png).
+
+| 시나리오 | 주입 (KST) | 동작 | 복구 |
+| --- | --- | --- | --- |
+| S1 태스크 멈춤 | 20:27:45 `pyspark.daemon` SIGSTOP | 20:29:11 `query stalled`(90초) | 20:29:12 자동 재시작(주입 +87초) |
+| S2 DLQ 장애 유지 | 20:30:47 `max.message.bytes=100`, 20:32:07 되돌림 | 20:31:21 `TimeoutException: Expiring 9 record(s) ... 30000 ms`, batch 29 `failed`/`dlq_write_action`(`dlq_write_ms` 30,271) | 20:31:23 재시작. 장애가 남은 재실행 중 되돌림에서 `StackOverflowError` 멈춤 → 20:33:00 감시 종료(91초) → 20:33:01 재시작 |
+| S3 재시도 중 되돌림 | 20:34:17 주입, 19초 뒤 되돌림 | `StackOverflowError` 멈춤 재현 | 20:35:50 감시 종료(93초) → 재시작 |
+
+- 행 대조: 물리 행 = 고유 `event_id` = `FINAL` = 성공 배치 `order_rows` 합 = 생성기 `normal_order` = **1,122,310**.
+- DLQ: 토픽 메시지 66,097(offset 916,016 → 982,113) = 성공 배치 `dlq_rows` 합 66,082 = 생성기 `invalid_order` 66,082 + 15. 15건은 재실행이 다시 쓴 메시지로 보며 키별 대조는 하지 않았다.
+- 재시작: 최종 `RestartCount` 4, 측정 뒤 실행 중. 11-18과 같은 동작·횟수다. `StackOverflowError` 멈춤은 이번에도 2회 재현됐다(누적 5회 중 5회).
+- 한계: 영구 장애에서 상한 없이 재시작이 반복되는 경우는 이번에도 시험하지 않았다. 장애는 모두 80초 안에 되돌렸다.
 
 ### 15분 이상 지속 부하 측정 결과 (2026-11-18)
 
